@@ -1,0 +1,35 @@
+spring:
+  application:
+    name: subway-monitoring-api
+  datasource:
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3307}/${DB_NAME:subway_monitoring}?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Seoul&characterEncoding=UTF-8
+    username: ${DB_USER:subway}
+    password: ${DB_PASSWORD:subway123}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.MySQLDialect
+
+server:
+  port: 8080
+
+elasticsearch:
+  url: ${ELASTICSEARCH_URL:http://localhost:9200}
+  anomaly-index: ${ANOMALY_INDEX:subway-anomaly-results}
+
+logging:
+  level:
+    root: INFO
+    com.monitoring.subway: DEBUG
+
+# Custom properties for Subway API
+subway:
+  api:
+    base-url: "http://swopenapi.seoul.go.kr/api/subway"
+    key: ${SUBWAY_API_KEY:sample}
+    key-secondary: ${SUBWAY_API_KEY_SECONDARY:sample}

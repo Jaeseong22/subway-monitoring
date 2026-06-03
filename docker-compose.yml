@@ -1,0 +1,129 @@
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: subway_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: subway_monitoring
+      MYSQL_USER: subway
+      MYSQL_PASSWORD: subway123
+      TZ: Asia/Seoul
+    ports:
+      - "127.0.0.1:3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    mem_limit: 768m
+    logging: *default-logging
+    networks:
+      - subway_network
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.2
+    container_name: subway_es
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+      - path.repo=/usr/share/elasticsearch/snapshots
+    ports:
+      - "127.0.0.1:9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+      - es_snapshots:/usr/share/elasticsearch/snapshots
+    mem_limit: 2g
+    logging: *default-logging
+    networks:
+      - subway_network
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.12.2
+    container_name: subway_logstash
+    restart: unless-stopped
+    environment:
+      - LS_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "127.0.0.1:50000:50000"
+    volumes:
+      - ./logstash/pipeline/logstash.conf:/usr/share/logstash/pipeline/logstash.conf:ro
+    depends_on:
+      - elasticsearch
+    mem_limit: 1g
+    logging: *default-logging
+    networks:
+      - subway_network
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.12.2
+    container_name: subway_kibana
+    restart: unless-stopped
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports:
+      - "127.0.0.1:5601:5601"
+    depends_on:
+      - elasticsearch
+    mem_limit: 768m
+    logging: *default-logging
+    networks:
+      - subway_network
+
+  backend:
+    build:
+      context: ./backend
+    container_name: subway_backend
+    restart: unless-stopped
+    environment:
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_NAME=subway_monitoring
+      - DB_USER=subway
+      - DB_PASSWORD=subway123
+      - LOGSTASH_HOST=logstash:50000
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - ANOMALY_INDEX=subway-anomaly-results
+      - SUBWAY_API_KEY=${SUBWAY_API_KEY:-sample}
+      - TZ=Asia/Seoul
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      - mysql
+      - logstash
+    mem_limit: 768m
+    logging: *default-logging
+    networks:
+      - subway_network
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Pass backend URL so Vite can bake it into the static code.
+        # This will be used by the browser to fetch API calls. 
+        # For local development `localhost:8080` is correct. For production, change this to an actual domain.
+        - VITE_API_URL=http://localhost:8080
+    container_name: subway_frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:80"
+    depends_on:
+      - backend
+    mem_limit: 256m
+    logging: *default-logging
+    networks:
+      - subway_network
+
+volumes:
+  mysql_data:
+  es_data:
+  es_snapshots:
+
+networks:
+  subway_network:
