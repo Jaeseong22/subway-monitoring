@@ -65,3 +65,28 @@ export interface AdminSummary {
   latestAnomalyTitle: string;
   latestAnomalyAt: string;
 }
+
+export interface FavoriteStation {
+  stationId: string;
+  stationName: string;
+  createdAt: string;
+}
+
+export interface StationPattern {
+  stationId: string;
+  stationName: string;
+  dayOfWeek: string;
+  hourOfDay: number;
+  viewCount: number;
+}
+
+export interface ArrivalAlert {
+  stationId: string;
+  stationName: string;
+  dayOfWeek: string;
+  hourOfDay: number;
+  message: string;
+  arrivalStatusMsg: string;
+  destination: string;
+  expectedArrivalSeconds: number;
+}

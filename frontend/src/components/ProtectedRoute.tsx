@@ -5,18 +5,21 @@ interface ProtectedRouteProps {
   children: React.ReactNode;
 }
 export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isAdmin } = useAuth();
   const location = useLocation();
   if (!isAuthenticated) {
     return (
       <Navigate
-        to="/admin/login"
+        to="/login"
         state={{
           from: location
         }}
         replace />);
 
 
+  }
+  if (!isAdmin) {
+    return <Navigate to="/" replace />;
   }
   return <>{children}</>;
 };

@@ -6,7 +6,9 @@ RUN npm install
 COPY . .
 # API 주소 환경변수 설정 (Vite에서 빌드 타임에 주입됨)
 ARG VITE_API_URL
+ARG VITE_GOOGLE_CLIENT_ID
 ENV VITE_API_URL=${VITE_API_URL}
+ENV VITE_GOOGLE_CLIENT_ID=${VITE_GOOGLE_CLIENT_ID}
 RUN npm run build
 
 # Runtime Stage (Nginx)

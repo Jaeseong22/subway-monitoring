@@ -4,10 +4,12 @@ import { Header } from '../components/Header';
 import { ArrivalGrid } from '../components/ArrivalGrid';
 import { ServiceNoticeBanner } from '../components/ServiceNoticeBanner';
 import { stations } from '../data/mockData';
-import { ArrowLeft, Map, Info } from 'lucide-react';
+import { ArrowLeft, Map, Info, Star } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { filterAndSortArrivals } from '../utils/arrival';
-import { useGlobalArrivals } from '../hooks/useGlobalArrivals';
+import { useArrivals } from '../hooks/useArrivals';
+import { useAuth } from '../context/AuthContext';
+import { useFavoriteStations } from '../hooks/useFavoriteStations';
 
 export const StationDetailPage: React.FC = () => {
   const { id } = useParams<{
@@ -15,7 +17,9 @@ export const StationDetailPage: React.FC = () => {
   }>();
   const navigate = useNavigate();
   const station = stations.find((s) => s.id === id);
-  const { allArrivals, isLoading } = useGlobalArrivals();
+  const { arrivals: stationArrivals } = useArrivals(id);
+  const { isAuthenticated } = useAuth();
+  const { isFavorite, toggleFavorite } = useFavoriteStations();
 
   useEffect(() => {
     window.scrollTo(0, 0);
@@ -42,10 +46,8 @@ export const StationDetailPage: React.FC = () => {
 
   }
 
-  // Filter and sort arrivals using real-time data from the hook
-  const stationArrivals = allArrivals.filter((a) => a.statnId === id);
-  const upArrivals = filterAndSortArrivals(allArrivals, id!, '0', 3);
-  const downArrivals = filterAndSortArrivals(allArrivals, id!, '1', 3);
+  const upArrivals = filterAndSortArrivals(stationArrivals, id!, '0', 3);
+  const downArrivals = filterAndSortArrivals(stationArrivals, id!, '1', 3);
   // Get latest recptnDt from any arrival for this station
   const latestRecptnDt =
   stationArrivals.length > 0 ? stationArrivals[0].recptnDt : undefined;
@@ -92,6 +94,21 @@ export const StationDetailPage: React.FC = () => {
             </div>
 
             <div className="flex flex-col items-end gap-2">
+              {isAuthenticated &&
+              <button
+                type="button"
+                onClick={() => toggleFavorite(station.id)}
+                className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-semibold transition-colors ${
+                  isFavorite(station.id)
+                    ? 'bg-yellow-50 border-yellow-200 text-yellow-700'
+                    : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
+                }`}>
+                <Star
+                  size={17}
+                  className={isFavorite(station.id) ? 'fill-yellow-400 text-yellow-400' : 'text-gray-400'} />
+                {isFavorite(station.id) ? '즐겨찾기됨' : '즐겨찾기'}
+              </button>
+              }
               {station.hasTransfer &&
               <div className="flex items-center gap-2">
                   <span className="text-sm text-gray-500 font-medium">

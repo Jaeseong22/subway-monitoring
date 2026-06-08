@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Train, Activity, Clock, LogOut, LogIn } from 'lucide-react';
+import { Train, Activity, Clock, LogOut, LogIn, UserCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 export const Header: React.FC = () => {
   const [currentTime, setCurrentTime] = useState(new Date());
   const location = useLocation();
   const navigate = useNavigate();
-  const { isAuthenticated, user, logout } = useAuth();
+  const { isAuthenticated, isAdmin, user, logout } = useAuth();
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
@@ -20,7 +20,7 @@ export const Header: React.FC = () => {
   };
   const handleLogout = () => {
     logout();
-    navigate('/admin/login');
+    navigate('/');
   };
   const isAdminArea = location.pathname.startsWith('/admin');
   return (
@@ -56,6 +56,7 @@ export const Header: React.FC = () => {
 
               {isAuthenticated ?
               <>
+                {isAdmin &&
                   <Link
                   to="/admin"
                   className={`flex items-center gap-1 text-sm font-medium transition-colors ${isAdminArea ? 'text-line1' : 'text-gray-500 hover:text-gray-900'}`}>
@@ -63,10 +64,18 @@ export const Header: React.FC = () => {
                     <Activity size={16} />
                     <span className="hidden sm:inline">관제 요약</span>
                   </Link>
+                }
                   <div className="h-4 w-px bg-gray-200" />
                   <div className="flex items-center gap-2">
+                    {user?.profileImageUrl ?
+                    <img
+                      src={user.profileImageUrl}
+                      alt=""
+                      className="w-6 h-6 rounded-full border border-gray-200" /> :
+                    <UserCircle size={18} className="text-gray-400" />
+                    }
                     <span className="hidden sm:inline text-xs text-gray-400">
-                      {user?.username}
+                      {user?.name}
                     </span>
                     <button
                     onClick={handleLogout}
@@ -79,11 +88,11 @@ export const Header: React.FC = () => {
                 </> :
 
               <Link
-                to="/admin/login"
+                to="/login"
                 className="flex items-center gap-1 text-sm font-medium text-gray-500 hover:text-gray-900 transition-colors">
                 
                   <LogIn size={16} />
-                  <span className="hidden sm:inline">관리자</span>
+                  <span className="hidden sm:inline">로그인</span>
                 </Link>
               }
             </nav>

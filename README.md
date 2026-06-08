@@ -85,7 +85,12 @@ Then fill in the required keys:
 SUBWAY_API_KEY=your_seoul_open_api_key
 SUBWAY_API_KEY_SECONDARY=optional_second_key
 OPENAI_API_KEY=your_openai_api_key
+GOOGLE_CLIENT_ID=your_google_oauth_web_client_id
+VITE_GOOGLE_CLIENT_ID=your_google_oauth_web_client_id
 ```
+
+`GOOGLE_CLIENT_ID` is used by the backend to verify Google ID tokens.
+`VITE_GOOGLE_CLIENT_ID` is baked into the frontend build so the browser can render the Google sign-in button.
 
 ## Run With Docker Compose
 
@@ -159,6 +164,53 @@ scripts/run_anomaly_demo.sh restore
 
 Use `restore` after a presentation to return the dashboard to live-log analysis.
 
+### Anomaly Validation Scenarios
+
+- `normal`: 정상 로그를 넣고 관제 요약이 정상 상태로 표시되는지 확인한다.
+- `api-failure`: API timeout/429 로그를 넣고 API 오류 또는 스케줄러 장애로 위험 상태가 표시되는지 확인한다.
+- `traffic-spike`: 요청량, CPU, 메모리, 큐 증가 로그를 넣고 트래픽 급증 및 수평 확장 권고가 표시되는지 확인한다.
+- `scheduler-failure`: 수집 스케줄러 실패 로그를 넣고 스케줄러 장애가 위험 상태로 표시되는지 확인한다.
+
+검증 후에는 반드시 live 로그 분석으로 되돌린다.
+
+```bash
+scripts/run_anomaly_demo.sh restore
+```
+
+## Favorite Alert Demo
+
+The favorite alert demo creates data that matches the real in-app alert conditions:
+
+- a user favorite station in MySQL
+- three `USER_STATION_VIEW` documents for the current day/hour in `subway-logs-*`
+- a station that currently has an arrival within 15 minutes
+
+Create validation data:
+
+```bash
+scripts/run_favorite_alert_demo.sh create
+```
+
+Keep validation data aligned with the current day/hour during a demo:
+
+```bash
+scripts/run_favorite_alert_demo.sh watch
+```
+
+Then open the frontend and log in with the same user:
+
+```text
+http://localhost:3000
+```
+
+The main page should show the favorite station section and, if the current arrival is still within 15 minutes, a personalized arrival alert card.
+
+Clean up demo data:
+
+```bash
+scripts/run_favorite_alert_demo.sh cleanup
+```
+
 ## Backup
 
 Create an Elasticsearch snapshot:
@@ -189,4 +241,3 @@ logstash/       Logstash pipeline configuration
 scripts/        Demo and snapshot scripts
 docker-compose.yml
 ```
-

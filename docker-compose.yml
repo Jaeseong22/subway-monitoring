@@ -90,6 +90,10 @@ services:
       - ELASTICSEARCH_URL=http://elasticsearch:9200
       - ANOMALY_INDEX=subway-anomaly-results
       - SUBWAY_API_KEY=${SUBWAY_API_KEY:-sample}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      - ADMIN_NAME=${ADMIN_NAME:-관리자}
       - TZ=Asia/Seoul
     ports:
       - "127.0.0.1:8080:8080"
@@ -109,6 +113,7 @@ services:
         # This will be used by the browser to fetch API calls. 
         # For local development `localhost:8080` is correct. For production, change this to an actual domain.
         - VITE_API_URL=http://localhost:8080
+        - VITE_GOOGLE_CLIENT_ID=${VITE_GOOGLE_CLIENT_ID:-}
     container_name: subway_frontend
     restart: unless-stopped
     ports:
@@ -116,6 +121,27 @@ services:
     depends_on:
       - backend
     mem_limit: 256m
+    logging: *default-logging
+    networks:
+      - subway_network
+
+  ai_model:
+    build:
+      context: ./ai_service
+    container_name: subway_ai_model
+    restart: unless-stopped
+    environment:
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - LOG_INDEX_PATTERN=subway-logs-*
+      - ANOMALY_INDEX=subway-anomaly-results
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - RUN_TIMES=${RUN_TIMES:-08:00,18:00}
+      - RUN_ON_STARTUP=${RUN_ON_STARTUP:-true}
+      - MISFIRE_GRACE_SECONDS=${MISFIRE_GRACE_SECONDS:-3600}
+      - TZ=Asia/Seoul
+    depends_on:
+      - elasticsearch
+    mem_limit: 512m
     logging: *default-logging
     networks:
       - subway_network

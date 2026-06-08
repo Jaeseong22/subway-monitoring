@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Station, ArrivalInfo } from '../types';
-import { ChevronRight, ArrowRight } from 'lucide-react';
+import { ChevronRight, ArrowRight, Star } from 'lucide-react';
 import { motion } from 'framer-motion';
 import {
   formatArrivalTime,
@@ -14,6 +14,9 @@ interface StationPreviewCardProps {
   upArrival?: ArrivalInfo;
   downArrival?: ArrivalInfo;
   onClose?: () => void;
+  isAuthenticated?: boolean;
+  isFavorite?: boolean;
+  onToggleFavorite?: (stationId: string) => void;
 }
 function ArrivalSummaryRow({
   label,
@@ -51,7 +54,10 @@ export const StationPreviewCard: React.FC<StationPreviewCardProps> = ({
   station,
   upArrival,
   downArrival,
-  onClose
+  onClose,
+  isAuthenticated = false,
+  isFavorite = false,
+  onToggleFavorite
 }) => {
   const navigate = useNavigate();
   const latestRecptnDt = upArrival?.recptnDt || downArrival?.recptnDt;
@@ -72,11 +78,27 @@ export const StationPreviewCard: React.FC<StationPreviewCardProps> = ({
       className="bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden w-80 flex flex-col">
       
       <div className="bg-line1 px-5 py-4 text-white relative">
-        <div className="flex items-center gap-2 mb-1">
-          <span className="w-5 h-5 rounded-full bg-white text-line1 flex items-center justify-center text-xs font-bold">
-            1
-          </span>
-          <h3 className="text-xl font-bold">{station.name}</h3>
+        <div className="flex items-center justify-between gap-3 mb-1">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="w-5 h-5 rounded-full bg-white text-line1 flex items-center justify-center text-xs font-bold">
+              1
+            </span>
+            <h3 className="text-xl font-bold truncate">{station.name}</h3>
+          </div>
+          {isAuthenticated &&
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggleFavorite?.(station.id);
+            }}
+            className="p-1.5 rounded-full bg-white/15 hover:bg-white/25 transition-colors"
+            title={isFavorite ? '즐겨찾기 해제' : '즐겨찾기 추가'}>
+            <Star
+              size={17}
+              className={isFavorite ? 'fill-yellow-300 text-yellow-300' : 'text-white'} />
+          </button>
+          }
         </div>
         <p className="text-blue-100 text-sm opacity-90">{station.nameEn}</p>
 

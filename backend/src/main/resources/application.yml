@@ -33,3 +33,13 @@ subway:
     base-url: "http://swopenapi.seoul.go.kr/api/subway"
     key: ${SUBWAY_API_KEY:sample}
     key-secondary: ${SUBWAY_API_KEY_SECONDARY:sample}
+
+google:
+  oauth:
+    client-id: ${GOOGLE_CLIENT_ID:}
+
+app:
+  admin:
+    email: ${ADMIN_EMAIL:}
+    password: ${ADMIN_PASSWORD:}
+    name: ${ADMIN_NAME:관리자}

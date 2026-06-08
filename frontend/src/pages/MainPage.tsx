@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Header } from '../components/Header';
 import { SearchBar } from '../components/SearchBar';
 import { StationPreviewCard } from '../components/StationPreviewCard';
@@ -10,10 +11,18 @@ import { Station } from '../types';
 import { getFirstArrival } from '../utils/arrival';
 import { AnimatePresence } from 'framer-motion';
 import { useGlobalArrivals } from '../hooks/useGlobalArrivals';
+import { useAuth } from '../context/AuthContext';
+import { useFavoriteStations } from '../hooks/useFavoriteStations';
+import { useArrivalAlerts } from '../hooks/useArrivalAlerts';
+import { Bell, Star } from 'lucide-react';
 
 export const MainPage: React.FC = () => {
   const [selectedStation, setSelectedStation] = useState<Station | null>(null);
+  const navigate = useNavigate();
   const { allArrivals, isLoading } = useGlobalArrivals();
+  const { isAuthenticated } = useAuth();
+  const { favorites, isFavorite, toggleFavorite } = useFavoriteStations();
+  const { alerts } = useArrivalAlerts();
 
   // Identify stations that currently have non-stop transit (isSkipping: true)
   const skippingStationIds = useMemo(() => {
@@ -54,6 +63,51 @@ export const MainPage: React.FC = () => {
         <div className="max-w-7xl mx-auto w-full px-4 mt-6">
           <ServiceNoticeBanner variant="banner" />
         </div>
+
+        {isAuthenticated && alerts.length > 0 &&
+        <div className="max-w-7xl mx-auto w-full px-4 mt-4">
+          <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Bell size={18} className="text-line1" />
+              <h2 className="text-sm font-bold text-gray-900">맞춤 도착 알림</h2>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {alerts.map((alert) =>
+              <button
+                key={`${alert.stationId}-${alert.dayOfWeek}-${alert.hourOfDay}`}
+                onClick={() => navigate(`/station/${alert.stationId}`)}
+                className="text-left rounded-xl bg-white border border-blue-100 px-4 py-3 hover:border-line1 transition-colors">
+                <p className="text-sm font-semibold text-gray-900">{alert.message}</p>
+                <p className="text-xs text-gray-500 mt-1">
+                  {alert.destination} · {alert.arrivalStatusMsg}
+                </p>
+              </button>
+              )}
+            </div>
+          </div>
+        </div>
+        }
+
+        {isAuthenticated && favorites.length > 0 &&
+        <div className="max-w-7xl mx-auto w-full px-4 mt-4">
+          <div className="rounded-2xl border border-gray-200 bg-white p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Star size={18} className="fill-yellow-400 text-yellow-400" />
+              <h2 className="text-sm font-bold text-gray-900">즐겨찾기 역</h2>
+            </div>
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {favorites.map((favorite) =>
+              <button
+                key={favorite.stationId}
+                onClick={() => navigate(`/station/${favorite.stationId}`)}
+                className="shrink-0 rounded-full border border-gray-200 bg-gray-50 px-4 py-2 text-sm font-semibold text-gray-700 hover:border-line1 hover:text-line1 transition-colors">
+                {favorite.stationName}
+              </button>
+              )}
+            </div>
+          </div>
+        </div>
+        }
 
         {/* Route Map Section */}
         <div className="flex-1 relative bg-gray-50">
@@ -108,6 +162,9 @@ export const MainPage: React.FC = () => {
                 station={selectedStation}
                 upArrival={upArrival}
                 downArrival={downArrival}
+                isAuthenticated={isAuthenticated}
+                isFavorite={isFavorite(selectedStation.id)}
+                onToggleFavorite={toggleFavorite}
                 onClose={() => setSelectedStation(null)} />
               
               </div>
@@ -122,6 +179,9 @@ export const MainPage: React.FC = () => {
                 station={selectedStation}
                 upArrival={upArrival}
                 downArrival={downArrival}
+                isAuthenticated={isAuthenticated}
+                isFavorite={isFavorite(selectedStation.id)}
+                onToggleFavorite={toggleFavorite}
                 onClose={() => setSelectedStation(null)} />
               
               </div>
