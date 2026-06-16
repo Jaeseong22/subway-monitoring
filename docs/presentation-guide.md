@@ -80,6 +80,37 @@ AI 서비스는 이 로그를 분석해 이상 여부를 판단한다.
 | `STATION_CONGESTION_ALERT` | 역별 열차 밀집 감지 |
 | `USER_STATION_VIEW` | 로그인 사용자의 역 상세 조회 행동 |
 
+### 5.1 Golden Signals 수집 항목
+
+Google SRE에서 제시하는 네 가지 주요 모니터링 지표인 latency, traffic, errors, saturation을 실제 서비스 로그로 수집한다.
+
+분 단위로 `TRAFFIC` 요약 로그를 남기며, 개별 API 요청 로그와 함께 Elasticsearch에 저장된다.
+
+| Golden Signal | 의미 | 실제 수집 필드 |
+|---|---|---|
+| Latency | 요청 처리 지연 | `elapsed_ms`, `avg_elapsed_ms`, `duration_ms` |
+| Traffic | 서비스 요청량 | `request_count`, `requests_per_second`, `endpoint` |
+| Errors | 실패율과 오류 | `success`, `error_count`, `error_rate`, `error_msg` |
+| Saturation | 시스템 포화도 | `cpu_percent`, `memory_percent`, `queue_depth`, `max_concurrent_requests`, `in_flight_requests` |
+
+요약 로그 예시는 다음과 같다.
+
+```text
+event_type=TRAFFIC
+event_name=golden_signals_summary
+request_count=120
+requests_per_second=2.00
+error_count=3
+error_rate=0.0250
+avg_elapsed_ms=42.5
+cpu_percent=35.2
+memory_percent=61.8
+queue_depth=5
+instance_count=1
+```
+
+이 로그를 통해 AI Agent는 실제 운영 중 발생한 요청량, 오류율, 지연 시간, CPU/메모리 포화도를 함께 분석할 수 있다.
+
 ## 6. AI 이상탐지 분석 흐름
 
 AI 이상탐지는 `ai_service`에서 수행한다.
@@ -445,3 +476,143 @@ scripts/run_favorite_alert_demo.sh cleanup
 트래픽 급증 시 현재 시스템은 자동으로 서버를 늘리지는 않는다.
 
 현재는 트래픽 이상을 감지하고, 수평 확장과 로드밸런싱이 필요하다는 조치사항을 관리자에게 제안하는 단계이다.
+
+## 19. 참고자료
+
+보고서나 발표 자료에서는 Wikipedia보다 공식 문서, 공공데이터 포털, 기업 공식 기술 문서, 학술 논문을 사용하는 것이 적합하다.
+
+### 19.1 공공 교통 데이터
+
+- 서울 열린데이터광장, `서울시 지하철 실시간 도착정보`
+  - URL: https://data.seoul.go.kr/dataList/OA-12764/F/1/datasetView.do
+  - 활용 근거:
+    - 서울특별시가 제공하는 공식 공공데이터이다.
+    - 데이터 분류는 `교통`이다.
+    - 관련 태그에 지하철역, 도착, 상행선, 하행선, 도착예정시간, 열차번호 등이 포함되어 있어 본 프로젝트의 실시간 도착정보 수집 목적과 직접적으로 연결된다.
+    - 실시간 데이터는 API 방식으로 제공되며, 과거 데이터는 별도 적재가 어렵다는 설명이 있어 본 프로젝트가 MySQL에는 최신 상태만 저장하고 Elasticsearch에는 로그를 저장하는 구조를 선택한 근거로 활용할 수 있다.
+
+### 19.2 실시간 대중교통 데이터 표준
+
+- Google for Developers, `GTFS Realtime Overview`
+  - URL: https://developers.google.com/transit/gtfs-realtime
+  - 활용 근거:
+    - GTFS Realtime은 대중교통 기관이 실시간 지연, 차량 위치, 서비스 알림 등을 애플리케이션에 제공하기 위한 공식 사양이다.
+    - 실시간 도착/출발 정보와 서비스 알림이 사용자 경험을 향상시킨다는 설명이 있어 본 프로젝트의 실시간 지하철 도착정보 제공 필요성을 설명하는 근거로 사용할 수 있다.
+    - Trip updates, Service alerts, Vehicle positions를 지원하므로 본 프로젝트의 도착정보, 이상 상태, 알림 기능과 비교할 수 있다.
+
+### 19.3 Observability와 로그 기반 모니터링
+
+- Elastic, `Elastic Observability`
+  - URL: https://www.elastic.co/observability
+  - 활용 근거:
+    - Elastic은 로그, 메트릭, 트레이스를 하나의 관측 데이터로 통합해 시스템 상태를 분석하는 Observability 플랫폼을 제공한다.
+    - 로그, 메트릭, 트레이스를 기반으로 문제 해결, 근본 원인 분석, 알림, 대시보드 구성을 지원한다.
+    - 본 프로젝트의 Logstash, Elasticsearch, Kibana 기반 로그 수집 및 관리자 대시보드 구조와 직접적으로 관련된다.
+
+- Elastic Docs, `Anomaly detection with machine learning`
+  - URL: https://www.elastic.co/docs/explore-analyze/machine-learning/anomaly-detection
+  - 활용 근거:
+    - Elastic 공식 문서는 시계열 데이터를 분석해 데이터셋의 비정상 패턴을 식별할 수 있다고 설명한다.
+    - 본 프로젝트는 Elastic의 내장 ML 기능을 그대로 사용하지는 않지만, Elasticsearch에 저장된 시계열 로그를 AI Agent가 분석해 이상 상태를 판단한다는 점에서 같은 문제 영역에 속한다.
+
+### 19.4 AIOps와 AI 기반 운영 자동화
+
+- IBM, `What is AIOps?`
+  - URL: https://www.ibm.com/think/topics/aiops
+  - 활용 근거:
+    - IBM은 AIOps를 AI, 자연어 처리, 머신러닝을 활용해 IT 운영과 서비스 관리 워크플로를 자동화, 간소화, 최적화하는 개념으로 설명한다.
+    - AIOps가 대량의 운영 데이터, 시스템 로그, 메트릭을 수집하고 이상 이벤트를 식별하며 원인 분석과 조치 제안을 수행한다는 설명은 본 프로젝트의 AI 이상탐지 구조와 직접적으로 연결된다.
+    - 본 프로젝트의 AI Agent는 API 오류율, 트래픽 요청량, 스케줄러 실패 로그를 분석해 상태를 판단하고 조치사항을 제공하므로 AIOps의 축소 구현 사례로 설명할 수 있다.
+
+### 19.5 학술 자료
+
+- Lingzhe Zhang et al., `A Survey of AIOps for Failure Management in the Era of Large Language Models`, arXiv, 2024
+  - URL: https://arxiv.org/abs/2406.11213
+  - 활용 근거:
+    - LLM 시대의 AIOps와 장애 관리 연구 동향을 정리한 서베이 논문이다.
+    - AIOps가 대규모 소프트웨어 시스템의 장애 관리, 고가용성, 신뢰성 확보를 위해 활용된다는 점을 설명하는 학술 근거로 사용할 수 있다.
+    - 본 프로젝트의 로그 기반 장애 탐지와 AI Agent 기반 조치사항 생성 방향을 설명하는 배경 자료로 적합하다.
+
+### 19.6 유사 서비스의 운영 관제 동향
+
+네이버맵, 카카오맵, 구글맵과 같은 대규모 지도 및 모빌리티 서비스가 내부적으로 어떤 관제 도구를 사용하는지는 대부분 공개되어 있지 않다.
+
+따라서 보고서에서는 특정 기업이 `ELK와 AI를 사용한다`고 단정하기보다, 공개 자료로 확인 가능한 범위에서 다음과 같이 설명하는 것이 안전하다.
+
+```text
+네이버맵, 카카오맵, 구글맵과 같은 지도 및 모빌리티 서비스는 실시간 위치, 경로, 교통, 도착정보와 같이 지속적으로 변하는 데이터를 제공해야 하므로, 장애 감지와 운영 관제가 중요하다. 다만 각 기업의 내부 관제 도구와 AI 적용 방식은 공개 범위가 제한적이기 때문에, 본 보고서에서는 Google SRE, Uber 실시간 데이터 인프라, Elastic Observability, IBM AIOps와 같은 공개 자료를 바탕으로 대규모 실시간 서비스에서 로그·메트릭 기반 관제와 AI 기반 이상탐지가 중요해지고 있음을 근거로 삼는다.
+```
+
+#### Google SRE 사례
+
+- Google, `Site Reliability Engineering - Monitoring Distributed Systems`
+  - URL: https://sre.google/sre-book/monitoring-distributed-systems/
+  - 활용 근거:
+    - Google SRE 문서는 대규모 분산 시스템 운영에서 모니터링과 알림이 필수적이라고 설명한다.
+    - 모니터링은 시스템의 query count, error count, processing time 같은 실시간 정량 데이터를 수집, 처리, 집계, 표시하는 활동으로 정의된다.
+    - 서비스 대시보드는 핵심 메트릭을 요약해서 보여주며, 대표적인 모니터링 지표로 latency, traffic, errors, saturation의 네 가지 golden signals를 제시한다.
+    - 본 프로젝트의 AI 이상탐지 기준인 API 응답시간, 트래픽 요청량, 오류율, 처리 용량 위험은 Google SRE의 golden signals와 대응된다.
+
+Google SRE의 네 가지 golden signals와 본 프로젝트 지표를 연결하면 다음과 같다.
+
+| Google SRE 지표 | 의미 | 본 프로젝트 대응 지표 |
+|---|---|---|
+| Latency | 요청 처리 시간 | API 평균/최대 응답시간, 스케줄러 수행시간 |
+| Traffic | 시스템에 들어오는 요청량 | 백엔드 요청량, 요청 수, RPS |
+| Errors | 실패 요청 비율 | 외부 API 오류율, 스케줄러 실패 |
+| Saturation | 시스템 포화 상태 | 트래픽 임계치 초과, CPU, 단일 인스턴스 처리 위험 |
+
+#### Uber 실시간 모빌리티 데이터 인프라 사례
+
+- Yupeng Fu, Chinmay Soman, `Real-time Data Infrastructure at Uber`, arXiv, 2021
+  - URL: https://arxiv.org/abs/2104.00087
+  - 활용 근거:
+    - Uber는 승객, 운전자, 음식 주문 등 실시간성이 강한 데이터를 대량으로 수집하고, 초 단위 의사결정이 필요한 모빌리티 플랫폼이다.
+    - 논문은 Uber가 실시간 데이터 인프라를 구축하고, 엔지니어, 데이터 과학자, 운영 담당자 등 다양한 사용자에게 실시간 데이터를 제공해야 하는 복잡성을 설명한다.
+    - 이는 본 프로젝트가 실시간 지하철 도착정보를 수집하고 운영 대시보드와 사용자 알림으로 연결하는 구조와 유사한 문제 영역이다.
+
+#### Elastic Observability와 AIOps 동향
+
+- Elastic, `Elastic Observability`
+  - URL: https://www.elastic.co/observability
+  - 활용 근거:
+    - Elastic은 logs, metrics, traces를 통합해 실시간 시스템 모델을 만들고, AI가 이를 기반으로 문제를 분석할 수 있다고 설명한다.
+    - 로그 분석, 인프라 모니터링, APM, 분산 추적, 알림, AI 기반 조사 기능을 제공한다.
+    - 본 프로젝트의 ELK 로그 수집, Kibana 확인, AI Agent 분석 구조와 기술 방향이 유사하다.
+
+- IBM, `What is AIOps?`
+  - URL: https://www.ibm.com/think/topics/aiops
+  - 활용 근거:
+    - IBM은 AIOps가 대량의 운영 데이터, 로그, 메트릭을 수집하고, 중요한 이벤트와 패턴을 식별하며, 원인 분석과 조치 제안을 수행한다고 설명한다.
+    - 본 프로젝트의 AI Agent는 최근 로그를 기반으로 API 장애, 트래픽 급증, 스케줄러 실패를 탐지하고 조치사항을 제안하므로 AIOps 개념을 소규모 도메인에 적용한 사례로 설명할 수 있다.
+
+#### 보고서 작성 시 주의할 표현
+
+다음 표현은 공개 근거가 부족하므로 피하는 것이 좋다.
+
+```text
+네이버맵과 카카오맵은 ELK와 AI를 이용해 운영 관제를 수행한다.
+구글맵은 ELK 기반 AI 이상탐지를 사용한다.
+```
+
+대신 다음처럼 쓰는 것이 안전하다.
+
+```text
+대규모 지도 및 모빌리티 서비스는 실시간 데이터 제공과 장애 대응을 위해 운영 관제가 필수적이다. Google SRE 문서는 대규모 분산 시스템에서 latency, traffic, errors, saturation과 같은 핵심 지표를 기반으로 모니터링해야 한다고 설명한다. 또한 Uber의 실시간 데이터 인프라 사례는 모빌리티 서비스에서 대량의 실시간 데이터를 수집하고 운영 및 의사결정에 활용하는 구조가 필요함을 보여준다. 최근에는 Elastic Observability와 IBM AIOps처럼 로그, 메트릭, 트레이스를 통합하고 AI를 활용해 이상탐지와 원인 분석을 지원하는 기술이 확산되고 있다. 본 프로젝트는 이러한 흐름을 지하철 실시간 도착정보 서비스에 적용한 사례이다.
+```
+
+## 20. 참고자료 활용 예시 문장
+
+보고서의 `국내외 현황` 또는 `개발의 필요성`에는 다음과 같은 방식으로 활용할 수 있다.
+
+```text
+서울특별시는 서울 열린데이터광장을 통해 지하철 실시간 도착정보를 공공데이터로 제공하고 있으며, 해당 데이터에는 역, 상하행, 도착예정시간, 열차번호 등 실시간 도착 안내에 필요한 정보가 포함된다. 그러나 실시간 데이터는 API 방식으로 제공되며 과거 데이터를 별도로 제공하지 않는 특성이 있어, 서비스 운영자는 별도의 저장 및 로그 분석 구조를 설계할 필요가 있다.
+```
+
+```text
+국외에서는 GTFS Realtime과 같은 실시간 대중교통 데이터 사양이 활용되고 있으며, 이는 지연, 차량 위치, 서비스 알림 등 실시간 상태 정보를 애플리케이션에 전달하기 위한 표준적 접근 방식이다. 이는 대중교통 서비스에서 실시간 정보 제공과 알림 기능이 사용자 경험 향상에 중요한 요소임을 보여준다.
+```
+
+```text
+운영 관점에서는 AIOps와 Observability 기술이 확산되고 있다. IBM은 AIOps를 운영 데이터, 로그, 메트릭을 분석해 이상 이벤트를 식별하고 원인 분석과 조치 제안을 수행하는 기술로 설명한다. Elastic 역시 로그, 메트릭, 트레이스를 통합해 시스템 상태를 분석하고 이상 패턴을 탐지하는 Observability 구조를 강조한다. 본 프로젝트는 이러한 흐름을 지하철 실시간 도착정보 서비스에 적용해, API 장애, 트래픽 급증, 스케줄러 실패를 자동으로 탐지하는 구조를 구현하였다.
+```

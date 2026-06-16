@@ -77,6 +77,8 @@ def fetch_metrics(state: GraphState) -> GraphState:
     traffic_request_count = sum(_to_int(e.get("request_count")) for e in traffic_events)
     traffic_peak_rps = max((_to_float(e.get("requests_per_second")) for e in traffic_events), default=0.0)
     traffic_peak_cpu = max((_to_float(e.get("cpu_percent")) for e in traffic_events), default=0.0)
+    traffic_peak_memory = max((_to_float(e.get("memory_percent")) for e in traffic_events), default=0.0)
+    traffic_peak_queue_depth = max((_to_int(e.get("queue_depth")) for e in traffic_events), default=0)
     traffic_instance_count = max((_to_int(e.get("instance_count")) for e in traffic_events), default=0)
     traffic_points = [
         {"ts": e.get("@timestamp"), "value": _to_int(e.get("request_count"))}
@@ -121,6 +123,8 @@ def fetch_metrics(state: GraphState) -> GraphState:
             "request_count": traffic_request_count,
             "peak_requests_per_second": traffic_peak_rps,
             "peak_cpu_percent": traffic_peak_cpu,
+            "peak_memory_percent": traffic_peak_memory,
+            "peak_queue_depth": traffic_peak_queue_depth,
             "instance_count": traffic_instance_count,
             "points": traffic_points,
         },
@@ -221,7 +225,8 @@ def fallback_result(context: dict[str, Any]) -> dict[str, Any]:
         evidence = [
             f"관측 요청량 {traffic_requests:,}건 (임계치 {traffic_threshold:,}건)",
             f"최대 처리량 {traffic.get('peak_requests_per_second', 0):.0f} req/s",
-            f"최대 CPU {traffic.get('peak_cpu_percent', 0):.1f}% / 가동 인스턴스 {traffic.get('instance_count', 0)}대",
+            f"최대 CPU {traffic.get('peak_cpu_percent', 0):.1f}% / 최대 메모리 {traffic.get('peak_memory_percent', 0):.1f}%",
+            f"최대 동시 요청 {traffic.get('peak_queue_depth', 0)}건 / 가동 인스턴스 {traffic.get('instance_count', 0)}대",
         ]
         actions = [
             "백엔드 인스턴스를 수평 확장하고 로드밸런서로 요청을 분산",

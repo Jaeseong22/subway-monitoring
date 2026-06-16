@@ -1,6 +1,7 @@
 package com.monitoring.subway.logging;
 
 import lombok.extern.slf4j.Slf4j;
+import org.aspectj.lang.JoinPoint;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
@@ -14,19 +15,29 @@ import java.util.UUID;
 @Component
 public class LoggingAspect {
 
+    private final RequestTrafficMetrics requestTrafficMetrics;
+
+    public LoggingAspect(RequestTrafficMetrics requestTrafficMetrics) {
+        this.requestTrafficMetrics = requestTrafficMetrics;
+    }
+
     @Around("execution(* com.monitoring.subway.domain..*Controller.*(..))")
     public Object logTraffic(ProceedingJoinPoint joinPoint) throws Throwable {
         String methodName = joinPoint.getSignature().getName();
+        String endpointName = endpointName(joinPoint);
         long startTime = System.currentTimeMillis();
+        requestTrafficMetrics.markStart();
         
         // MDC 설정
         MDC.put("event_type", "TRAFFIC");
         MDC.put("event_name", methodName);
+        MDC.put("endpoint", endpointName);
         MDC.put("request_id", UUID.randomUUID().toString());
         
         try {
             Object result = joinPoint.proceed();
             long elapsedTime = System.currentTimeMillis() - startTime;
+            requestTrafficMetrics.markComplete(elapsedTime, true);
             
             MDC.put("elapsed_ms", String.valueOf(elapsedTime));
             MDC.put("success", "true");
@@ -35,6 +46,7 @@ public class LoggingAspect {
             return result;
         } catch (Exception e) {
             long elapsedTime = System.currentTimeMillis() - startTime;
+            requestTrafficMetrics.markComplete(elapsedTime, false);
             
             MDC.put("elapsed_ms", String.valueOf(elapsedTime));
             MDC.put("success", "false");
@@ -45,6 +57,10 @@ public class LoggingAspect {
         } finally {
             MDC.clear();
         }
+    }
+
+    private String endpointName(JoinPoint joinPoint) {
+        return joinPoint.getSignature().getDeclaringType().getSimpleName() + "." + joinPoint.getSignature().getName();
     }
 
     @Around("@annotation(org.springframework.scheduling.annotation.Scheduled)")

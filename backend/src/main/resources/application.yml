@@ -43,3 +43,7 @@ app:
     email: ${ADMIN_EMAIL:}
     password: ${ADMIN_PASSWORD:}
     name: ${ADMIN_NAME:관리자}
+
+monitoring:
+  golden-signals:
+    interval-ms: ${GOLDEN_SIGNALS_INTERVAL_MS:60000}
