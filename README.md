@@ -1,137 +1,153 @@
-# Seoul Subway Monitoring
+# 서울 지하철 1호선 모니터링
 
-Real-time Seoul Subway Line 1 monitoring platform with Spring Boot, React, ELK, and AI anomaly detection.
+서울 지하철 1호선 실시간 도착정보를 수집하고, ELK 로그와 AI Agent를 활용해 서비스 이상 상태를 탐지하는 관제형 웹 서비스입니다.
 
-## Repository
+사용자는 실시간 도착정보, 역 검색, 즐겨찾기, 개인화 도착 알림을 사용할 수 있고, 관리자는 AI 이상탐지 결과와 운영 지표를 대시보드에서 확인할 수 있습니다.
 
-- Recommended name: `seoul-subway-monitoring`
-- GitHub description: `Real-time Seoul Subway Line 1 monitoring platform with Spring Boot, React, ELK, and AI anomaly detection.`
+## 주요 기능
 
-## Overview
+- 서울 지하철 1호선 실시간 도착정보 수집
+- 역 검색, 노선도, 역별 도착정보 화면
+- 일반 로그인 및 Google OAuth 로그인
+- 사용자/관리자 권한 분리
+- 사용자별 즐겨찾기 역 관리
+- 요일/시간대 기반 개인화 도착 알림
+- Spring Boot API, 스케줄러, 외부 API 호출 로그 수집
+- Logstash, Elasticsearch, Kibana 기반 ELK 로그 파이프라인
+- Golden Signals 기반 운영 지표 수집
+  - latency
+  - traffic
+  - errors
+  - saturation
+- Python AI Agent 기반 이상탐지
+- 관리자 관제 대시보드
+- 이상탐지 발표용 데모 데이터 생성 스크립트
+- Elasticsearch 스냅샷 백업 스크립트
+- Elasticsearch/Kibana 로컬 포트 바인딩 보안 설정
 
-This project collects Seoul subway real-time arrival data, stores the latest Line 1 arrival state, streams structured service logs into Elasticsearch, and publishes AI-generated anomaly summaries to an admin dashboard.
+## 전체 구조
 
 ```text
-Seoul Open API
-  -> Spring Boot scheduler
-     -> MySQL latest arrival snapshot
-     -> Logstash JSON logs
-        -> Elasticsearch daily log indices
-           -> Python AI anomaly service
-              -> Elasticsearch anomaly result index
-                 -> Spring Boot admin API
-                    -> React dashboard
+서울 열린데이터 API
+  -> Spring Boot 수집 스케줄러
+     -> MySQL 최신 도착정보 저장
+     -> React 사용자 화면 제공
+     -> 구조화 로그 생성
+        -> Logstash 로그 수집
+           -> Elasticsearch 로그 저장
+              -> Python AI Agent 이상탐지
+                 -> Elasticsearch 이상탐지 결과 저장
+                    -> Spring Boot 관리자 API
+                       -> React 관리자 대시보드
 ```
 
-## Features
+## 기술 스택
 
-- Real-time Seoul Subway Line 1 arrival collection
-- Station search and arrival status UI
-- Spring Boot backend with MySQL persistence
-- Structured API, scheduler, and metric logs
-- Logstash to Elasticsearch ingestion
-- Kibana access for log inspection
-- Python AI anomaly analysis service using LangGraph and OpenAI
-- Deterministic anomaly demo scenarios for presentations
-- Elasticsearch snapshot script for log and anomaly-result backup
-- Local-only Docker port binding for safer development
-
-## Tech Stack
-
-- Frontend: React, TypeScript, Vite, Tailwind CSS, Recharts
-- Backend: Spring Boot, Java, JPA, MySQL
-- Logs: Logstash, Elasticsearch, Kibana
-- AI service: Python, LangGraph, LangChain, OpenAI API
-- Runtime: Docker Compose
-
-## Services
-
-| Service | Local URL | Notes |
+| 구분 | 기술 | 역할 |
 |---|---|---|
-| Frontend | `http://localhost:3000` | React app served by Nginx |
+| Frontend | React, TypeScript, Vite, Tailwind CSS, Recharts | 사용자 화면, 즐겨찾기, 개인화 알림, 관리자 대시보드 |
+| Backend | Spring Boot, Java, Spring Data JPA | API 서버, 도착정보 수집, 인증, 즐겨찾기, 관리자 API |
+| Database | MySQL | 사용자, 세션, 즐겨찾기, 최신 도착정보 저장 |
+| Log/Monitoring | Logstash, Elasticsearch, Kibana | 로그 수집, 저장, 검색, 확인 |
+| AI Service | Python, LangGraph, OpenAI 연동 가능 구조 | 로그 기반 이상탐지, 판단 근거, 추천 조치사항 생성 |
+| Infra | Docker Compose | 전체 서비스 컨테이너 실행 |
+
+## 서비스 주소
+
+Docker Compose로 실행했을 때 기본 주소는 다음과 같습니다.
+
+| 서비스 | 주소 | 설명 |
+|---|---|---|
+| Frontend | `http://localhost:3000` | React 웹 화면 |
 | Backend API | `http://localhost:8080` | Spring Boot API |
-| Elasticsearch | `http://localhost:9200` | Bound to `127.0.0.1` only |
-| Kibana | `http://localhost:5601` | Bound to `127.0.0.1` only |
-| MySQL | `localhost:3307` | Docker MySQL port |
-| Logstash TCP | `localhost:50000` | JSON log ingestion |
+| Elasticsearch | `http://localhost:9200` | 로그 저장소, 로컬 접근만 허용 |
+| Kibana | `http://localhost:5601` | 로그 검색 화면, 로컬 접근만 허용 |
+| MySQL | `localhost:3307` | Docker MySQL 포트 |
+| Logstash TCP | `localhost:50000` | 백엔드 JSON 로그 수집 |
 
-## Security Note
+## 실행 준비
 
-Elasticsearch and Kibana are intentionally bound to `127.0.0.1` in `docker-compose.yml`.
-Do not expose `9200` or `5601` to the public internet without enabling proper authentication, TLS, and network restrictions.
-
-The `.env` file is ignored by Git. Use `.env.example` as a template and keep real API keys out of the repository.
-
-## Prerequisites
+필요한 도구는 다음과 같습니다.
 
 - Docker Desktop
-- Java 25 for local backend development
-- Node.js 20 or newer for local frontend development
-- Python 3.9 or newer for local AI service development
-- Seoul Open API subway key
-- OpenAI API key for LLM-based anomaly analysis
+- Java 25 이상
+- Node.js 20 이상
+- Python 3.9 이상
+- 서울 열린데이터광장 지하철 API 키
+- Google OAuth Client ID
+- OpenAI API Key
 
-## Environment
-
-Create a local `.env` file from the example:
+`.env.example`을 복사해서 `.env` 파일을 만든 뒤 값을 채웁니다.
 
 ```bash
 cp .env.example .env
 ```
 
-Then fill in the required keys:
+주요 환경 변수는 다음과 같습니다.
 
 ```bash
 SUBWAY_API_KEY=your_seoul_open_api_key
 SUBWAY_API_KEY_SECONDARY=optional_second_key
+
 OPENAI_API_KEY=your_openai_api_key
+OPENAI_MODEL=gpt-4o-mini
+
 GOOGLE_CLIENT_ID=your_google_oauth_web_client_id
 VITE_GOOGLE_CLIENT_ID=your_google_oauth_web_client_id
+
+ADMIN_EMAIL=
+ADMIN_PASSWORD=
+ADMIN_NAME=관리자
 ```
 
-`GOOGLE_CLIENT_ID` is used by the backend to verify Google ID tokens.
-`VITE_GOOGLE_CLIENT_ID` is baked into the frontend build so the browser can render the Google sign-in button.
+`GOOGLE_CLIENT_ID`는 백엔드에서 Google ID Token을 검증할 때 사용합니다.
 
-## Run With Docker Compose
+`VITE_GOOGLE_CLIENT_ID`는 프론트엔드 빌드 시 브라우저 로그인 버튼에 사용됩니다.
+
+실제 API 키와 OAuth 값은 `.env`에만 저장하고 GitHub에는 올리지 않습니다.
+
+## Docker Compose 실행
+
+전체 서비스를 한 번에 실행합니다.
 
 ```bash
 docker compose up -d --build
 ```
 
-Open:
-
-```text
-http://localhost:3000
-```
-
-Kibana:
-
-```text
-http://localhost:5601
-```
-
-Check containers:
+실행 상태를 확인합니다.
 
 ```bash
 docker compose ps
 ```
 
-Stop services:
+프론트엔드에 접속합니다.
+
+```text
+http://localhost:3000
+```
+
+Kibana에 접속합니다.
+
+```text
+http://localhost:5601
+```
+
+전체 서비스를 중지합니다.
 
 ```bash
 docker compose down
 ```
 
-## Local Development
+## 로컬 개발 실행
 
-Backend:
+백엔드만 로컬로 실행합니다.
 
 ```bash
 cd backend
 ./gradlew bootRun
 ```
 
-Frontend:
+프론트엔드만 로컬로 실행합니다.
 
 ```bash
 cd frontend
@@ -139,7 +155,7 @@ npm install
 npm run dev
 ```
 
-AI service:
+AI 서비스를 로컬로 실행합니다.
 
 ```bash
 cd ai_service
@@ -149,10 +165,94 @@ pip install -r requirements.txt
 python main.py
 ```
 
-## Anomaly Demo
+## 데이터 저장 구조
 
-The demo script writes synthetic logs into `subway-demo-logs` and publishes a result to `subway-anomaly-results`.
-It does not modify production `subway-logs-*` indices.
+MySQL은 서비스에 필요한 현재 상태 데이터를 저장합니다.
+
+- 사용자 계정
+- 로그인 세션
+- 지하철 역 정보
+- 사용자 즐겨찾기 역
+- 최신 도착정보
+
+현재 `arrival_info`는 과거 이력을 저장하지 않고 최신 도착정보 스냅샷만 유지합니다. 스케줄러가 새 도착정보를 수집하면 기존 도착정보를 삭제하고 최신 데이터를 다시 저장합니다.
+
+Elasticsearch는 시간 흐름에 따른 로그와 분석 결과를 저장합니다.
+
+- `subway-logs-*`
+  - API 호출 로그
+  - 스케줄러 실행 로그
+  - 트래픽 로그
+  - Golden Signals 요약 로그
+  - 사용자 역 조회 행동 로그
+- `subway-anomaly-results`
+  - AI 이상탐지 결과
+  - 판단 근거
+  - 추천 조치사항
+  - 관련 메트릭 추이
+
+## Golden Signals 수집
+
+백엔드는 API 요청과 시스템 상태를 집계하여 1분마다 Golden Signals 요약 로그를 남깁니다.
+
+| 지표 | 의미 | 수집 필드 |
+|---|---|---|
+| Latency | 요청 처리 지연 | `elapsed_ms`, `avg_elapsed_ms`, `duration_ms` |
+| Traffic | 서비스 요청량 | `request_count`, `requests_per_second`, `endpoint` |
+| Errors | 실패율과 오류 | `success`, `error_count`, `error_rate`, `error_msg` |
+| Saturation | 시스템 포화도 | `cpu_percent`, `memory_percent`, `queue_depth`, `in_flight_requests`, `max_concurrent_requests` |
+
+예시 로그:
+
+```text
+event_type=TRAFFIC
+event_name=golden_signals_summary
+request_count=120
+requests_per_second=2.00
+error_count=3
+error_rate=0.0250
+avg_elapsed_ms=42.5
+cpu_percent=35.2
+memory_percent=61.8
+queue_depth=5
+```
+
+AI Agent는 이 로그를 활용해 트래픽 급증, 오류율 증가, 서버 자원 포화 가능성을 판단합니다.
+
+## AI 이상탐지
+
+AI 서비스는 Elasticsearch의 `subway-logs-*` 인덱스에서 최근 로그를 조회하고 서비스 상태를 분석합니다.
+
+기본 분석 대상:
+
+- 외부 서울 지하철 API 호출 수
+- API 실패 수
+- API 오류율
+- 평균/최대 응답 시간
+- 백엔드 요청량
+- 초당 요청 수
+- CPU 사용률
+- 메모리 사용률
+- 큐 깊이
+- 동시 요청 수
+- 스케줄러 실행/실패 로그
+- 수집 메트릭
+
+기본 판단 기준:
+
+| 조건 | 판단 |
+|---|---|
+| API 오류율 20% 이상 | 위험 |
+| API 오류율 5% 이상 | 주의 |
+| 최근 분석 구간 요청량 1,000건 이상 | 위험 |
+| 스케줄러 실패 1건 이상 | 위험 |
+| 위 조건 없음 | 정상 |
+
+분석 결과는 `subway-anomaly-results` 인덱스에 저장되고 관리자 대시보드에 표시됩니다.
+
+## 이상탐지 데모
+
+발표나 검증을 위해 합성 로그와 이상탐지 결과를 생성할 수 있습니다.
 
 ```bash
 scripts/run_anomaly_demo.sh normal
@@ -162,82 +262,113 @@ scripts/run_anomaly_demo.sh scheduler-failure
 scripts/run_anomaly_demo.sh restore
 ```
 
-Use `restore` after a presentation to return the dashboard to live-log analysis.
+시나리오 설명:
 
-### Anomaly Validation Scenarios
+- `normal`: 정상 상태 로그를 생성합니다.
+- `api-failure`: 외부 API timeout/429 오류 상황을 생성합니다.
+- `traffic-spike`: 요청량, CPU, 메모리, 큐 증가 상황을 생성합니다.
+- `scheduler-failure`: 수집 스케줄러 실패 상황을 생성합니다.
+- `restore`: 데모 로그가 아니라 실제 라이브 로그 분석 상태로 되돌립니다.
 
-- `normal`: 정상 로그를 넣고 관제 요약이 정상 상태로 표시되는지 확인한다.
-- `api-failure`: API timeout/429 로그를 넣고 API 오류 또는 스케줄러 장애로 위험 상태가 표시되는지 확인한다.
-- `traffic-spike`: 요청량, CPU, 메모리, 큐 증가 로그를 넣고 트래픽 급증 및 수평 확장 권고가 표시되는지 확인한다.
-- `scheduler-failure`: 수집 스케줄러 실패 로그를 넣고 스케줄러 장애가 위험 상태로 표시되는지 확인한다.
-
-검증 후에는 반드시 live 로그 분석으로 되돌린다.
+발표 후에는 반드시 다음 명령으로 라이브 분석 상태로 복구합니다.
 
 ```bash
 scripts/run_anomaly_demo.sh restore
 ```
 
-## Favorite Alert Demo
+## 즐겨찾기 알림 데모
 
-The favorite alert demo creates data that matches the real in-app alert conditions:
+즐겨찾기 알림은 다음 조건을 만족할 때 표시됩니다.
 
-- a user favorite station in MySQL
-- three `USER_STATION_VIEW` documents for the current day/hour in `subway-logs-*`
-- a station that currently has an arrival within 15 minutes
+- 로그인한 사용자의 즐겨찾기 역
+- 최근 30일 동안 같은 요일과 같은 시간대에 3회 이상 조회
+- 해당 역에 15분 이내 도착 예정 열차가 있음
 
-Create validation data:
+검증 데이터를 생성합니다.
 
 ```bash
 scripts/run_favorite_alert_demo.sh create
 ```
 
-Keep validation data aligned with the current day/hour during a demo:
+발표 중 현재 요일/시간대에 계속 맞춰 유지합니다.
 
 ```bash
 scripts/run_favorite_alert_demo.sh watch
 ```
 
-Then open the frontend and log in with the same user:
-
-```text
-http://localhost:3000
-```
-
-The main page should show the favorite station section and, if the current arrival is still within 15 minutes, a personalized arrival alert card.
-
-Clean up demo data:
+검증 데이터를 정리합니다.
 
 ```bash
 scripts/run_favorite_alert_demo.sh cleanup
 ```
 
-## Backup
+## Elasticsearch 백업
 
-Create an Elasticsearch snapshot:
+Elasticsearch 로그와 이상탐지 결과를 스냅샷으로 백업할 수 있습니다.
 
 ```bash
 scripts/elk_snapshot.sh
 ```
 
-The snapshot script includes:
+백업 대상:
 
 - `subway-logs-*`
 - `subway-anomaly-results`
 
-## Current Data Model
+## 보안 주의사항
 
-MySQL stores the latest arrival state, not historical arrival records.
-The backend refreshes `arrival_info` by deleting the previous rows and inserting the latest API result.
-
-Elasticsearch stores time-series operational logs and AI anomaly result documents.
-
-## Project Structure
+`docker-compose.yml`에서 Elasticsearch와 Kibana는 `127.0.0.1`에만 바인딩되어 있습니다.
 
 ```text
-backend/        Spring Boot API and scheduler
-frontend/       React dashboard
-ai_service/     Python AI anomaly analysis service
-logstash/       Logstash pipeline configuration
-scripts/        Demo and snapshot scripts
+127.0.0.1:9200
+127.0.0.1:5601
+```
+
+이 설정은 로컬 개발 환경에서 외부 접근을 막기 위한 것입니다. Elasticsearch `9200` 포트와 Kibana `5601` 포트를 공개 인터넷에 직접 노출하지 마세요.
+
+운영 환경에 배포하려면 다음 설정이 필요합니다.
+
+- Elasticsearch/Kibana 인증
+- TLS 적용
+- 네트워크 접근 제어
+- 관리자 계정 보호
+- API Rate Limit
+- 실제 운영용 로그 보존 정책
+
+## 프로젝트 구조
+
+```text
+backend/        Spring Boot API, 수집 스케줄러, 인증, 로그 수집
+frontend/       React 사용자 화면 및 관리자 대시보드
+ai_service/     Python AI 이상탐지 서비스
+logstash/       Logstash 파이프라인 설정
+scripts/        데모 데이터, AI 실행, ELK 백업 스크립트
+docs/           발표 자료와 설계 문서
 docker-compose.yml
 ```
+
+## 참고 자료
+
+- 서울 열린데이터광장, 서울시 지하철 실시간 도착정보
+  - https://data.seoul.go.kr/dataList/OA-12764/F/1/datasetView.do
+
+- Google for Developers, GTFS Realtime Overview
+  - https://developers.google.com/transit/gtfs-realtime
+
+- Google SRE Book, Monitoring Distributed Systems
+  - https://sre.google/sre-book/monitoring-distributed-systems/
+
+- Elastic, Observability
+  - https://www.elastic.co/observability
+
+- Elastic Docs, Anomaly detection with machine learning
+  - https://www.elastic.co/docs/explore-analyze/machine-learning/anomaly-detection
+
+- IBM, What is AIOps?
+  - https://www.ibm.com/think/topics/aiops
+
+- Uber, Real-time Data Infrastructure at Uber
+  - https://arxiv.org/abs/2104.00087
+
+- A Survey of AIOps for Failure Management in the Era of Large Language Models
+  - https://arxiv.org/abs/2406.11213
