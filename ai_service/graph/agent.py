@@ -7,6 +7,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 
 from es_client import ElasticsearchClient
+from graph import detection
 from prompts.anomaly_prompt import build_anomaly_prompt
 
 
@@ -85,23 +86,32 @@ def fetch_metrics(state: GraphState) -> GraphState:
         for e in traffic_events
         if e.get("@timestamp") and _to_int(e.get("request_count")) > 0
     ]
+    # 지연: golden 요약의 avg_elapsed_ms, 없으면 개별 요청 elapsed_ms 사용.
+    traffic_latencies = [
+        _to_float(e.get("avg_elapsed_ms") if e.get("avg_elapsed_ms") is not None else e.get("elapsed_ms"))
+        for e in traffic_events
+        if e.get("avg_elapsed_ms") is not None or e.get("elapsed_ms") is not None
+    ]
+    traffic_avg_elapsed = sum(traffic_latencies) / len(traffic_latencies) if traffic_latencies else 0.0
+    # p95: golden 요약이 남긴 p95_elapsed_ms의 창 내 최댓값.
+    traffic_peak_p95 = max(
+        (_to_float(e.get("p95_elapsed_ms")) for e in traffic_events if e.get("p95_elapsed_ms") is not None),
+        default=0.0,
+    )
 
     latest_metric = metric_events[-1] if metric_events else {}
     day_of_week = str(latest_metric.get("day_of_week", ""))
     hour_of_day = str(latest_metric.get("hour_of_day", ""))
 
-    baseline_events = client.fetch_baseline_events(day_of_week, hour_of_day) if day_of_week and hour_of_day else []
-
-    baseline = {
-        "sample_count": len(baseline_events),
-        "avg_fetched_total": 0.0,
-        "avg_line1_saved": 0.0,
-        "avg_duration_ms": 0.0,
-    }
-    if baseline_events:
-        baseline["avg_fetched_total"] = sum(_to_float(e.get("fetched_total")) for e in baseline_events) / len(baseline_events)
-        baseline["avg_line1_saved"] = sum(_to_float(e.get("line1_saved")) for e in baseline_events) / len(baseline_events)
-        baseline["avg_duration_ms"] = sum(_to_float(e.get("duration_ms")) for e in baseline_events) / len(baseline_events)
+    # 기준선은 현재 시각의 시간대 + 평일/주말 기준으로 조회한다(로그가 없어도 안정적).
+    baseline_hour = str(now_local.hour)
+    baseline_is_weekend = "true" if now_local.weekday() >= 5 else "false"
+    try:
+        baseline_events = client.fetch_baseline_events(baseline_hour, baseline_is_weekend)
+    except Exception:
+        baseline_events = []
+    # 과거 같은 시간대 표본에서 신호별 평균/표준편차 기준선을 계산한다.
+    baseline = detection.compute_baseline_stats(baseline_events)
 
     metrics = {
         "analysis_window": {"start": window.start.isoformat(), "end": window.end.isoformat()},
@@ -119,7 +129,8 @@ def fetch_metrics(state: GraphState) -> GraphState:
             "total": traffic_total,
             "error": traffic_error,
             "error_rate": traffic_error / traffic_total if traffic_total else 0.0,
-            "avg_elapsed_ms": sum(_to_float(e.get("elapsed_ms")) for e in traffic_events) / traffic_total if traffic_total else 0.0,
+            "avg_elapsed_ms": traffic_avg_elapsed,
+            "p95_elapsed_ms": traffic_peak_p95,
             "request_count": traffic_request_count,
             "peak_requests_per_second": traffic_peak_rps,
             "peak_cpu_percent": traffic_peak_cpu,
@@ -159,142 +170,51 @@ def fetch_metrics(state: GraphState) -> GraphState:
 
 
 def analyze_with_llm(state: GraphState) -> GraphState:
-    context = {
-        "metrics": state["metrics"],
-        "baseline": state["baseline"],
-        "off_hours": state["off_hours"],
-    }
-    if os.getenv("ANALYSIS_MODE", "llm").lower() == "rules":
-        return {"result": fallback_result(context)}
+    metrics = state["metrics"]
+    baseline = state["baseline"]
+    off_hours = state["off_hours"]
+    # 통계적 기준선 기반 결정론적 판단(근거 있는 이상탐지). rules 모드와 LLM 폴백 모두 이걸 사용한다.
+    grounded = detection.evaluate(metrics, baseline, off_hours)
 
+    if os.getenv("ANALYSIS_MODE", "llm").lower() == "rules":
+        return {"result": grounded}
+
+    context = {
+        "metrics": metrics,
+        "baseline": baseline,
+        "off_hours": off_hours,
+        # LLM에 근거 있는 사전 판단을 함께 제공해 설명 품질을 높인다.
+        "grounded_analysis": grounded,
+    }
     model_name = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    llm = ChatOpenAI(model=model_name, temperature=0.2)
+    # response_format=json_object로 모델이 순수 JSON만 반환하도록 강제한다.
+    llm = ChatOpenAI(
+        model=model_name,
+        temperature=0.2,
+        model_kwargs={"response_format": {"type": "json_object"}},
+    )
     prompt = build_anomaly_prompt(context)
     try:
         response = llm.invoke(prompt)
         content = response.content if hasattr(response, "content") else str(response)
-        result = json.loads(content)
+        result = json.loads(_strip_code_fences(content))
     except Exception:
-        result = fallback_result(context)
+        # LLM 오류/네트워크 실패/파싱 실패 시 통계 기반 결과로 폴백한다.
+        result = grounded
 
     return {"result": result}
 
 
-def fallback_result(context: dict[str, Any]) -> dict[str, Any]:
-    metrics = context.get("metrics", {})
-    api = metrics.get("api", {})
-    traffic = metrics.get("traffic", {})
-    scheduler = metrics.get("scheduler", {})
-    api_error_rate = api.get("error_rate", 0.0)
-    scheduler_error = scheduler.get("error", 0)
-    traffic_requests = traffic.get("request_count", 0)
-    traffic_threshold = int(os.getenv("TRAFFIC_REQUEST_THRESHOLD", "1000"))
-    now = datetime.now(timezone.utc).isoformat()
-    evidence: list[str] = []
-    actions: list[str] = []
-    trend_label = "API 오류율 (%)"
-    trend_points = [{"ts": now, "value": api_error_rate * 100, "baseline": 20}]
-
-    if api_error_rate >= 0.2:
-        status = "위험"
-        severity = "critical"
-        title = "서울 실시간 도착 API 응답 장애"
-        summary = (
-            f"도착 API 요청 {api.get('total', 0)}건 중 {api.get('error', 0)}건이 실패해 "
-            f"오류율 {api_error_rate * 100:.1f}%가 위험 임계치 20%를 초과했습니다."
-        )
-        evidence = [
-            f"오류율 {api_error_rate * 100:.1f}% (위험 임계치 20%)",
-            f"평균 응답 {api.get('avg_elapsed_ms', 0):.0f}ms / 최대 응답 {api.get('max_elapsed_ms', 0):.0f}ms",
-            f"대상 API: {', '.join(api.get('endpoints', [])) or '실시간 도착 API'}",
-            f"응답 코드: {', '.join(api.get('http_statuses', [])) or '미기록'} / 원인 코드: {', '.join(api.get('error_codes', [])) or '미기록'}",
-        ]
-        actions = [
-            "서울교통공사 API 응답 상태와 호출 제한을 확인",
-            "실패 요청에 지수 백오프 재시도와 마지막 정상 데이터 캐시 적용",
-            "HTTP 상태 및 timeout 유형별 알림을 분리해 장애 범위를 확인",
-        ]
-    elif traffic_requests >= traffic_threshold:
-        status = "위험"
-        severity = "critical"
-        title = "접속 트래픽 급증 및 처리 용량 위험"
-        summary = (
-            f"최근 관측 요청량 {traffic_requests:,}건이 처리 기준 {traffic_threshold:,}건을 초과했습니다. "
-            "단일 백엔드 인스턴스에서 지연과 요청 실패가 발생할 수 있습니다."
-        )
-        evidence = [
-            f"관측 요청량 {traffic_requests:,}건 (임계치 {traffic_threshold:,}건)",
-            f"최대 처리량 {traffic.get('peak_requests_per_second', 0):.0f} req/s",
-            f"최대 CPU {traffic.get('peak_cpu_percent', 0):.1f}% / 최대 메모리 {traffic.get('peak_memory_percent', 0):.1f}%",
-            f"최대 동시 요청 {traffic.get('peak_queue_depth', 0)}건 / 가동 인스턴스 {traffic.get('instance_count', 0)}대",
-        ]
-        actions = [
-            "백엔드 인스턴스를 수평 확장하고 로드밸런서로 요청을 분산",
-            "정적 조회 및 최근 도착 응답에 캐시를 적용해 API 부하를 감소",
-            "CPU 또는 요청량 기준 자동 확장 정책을 설정하고 DB 연결 풀 한도를 점검",
-        ]
-        trend_label = "요청량 (건)"
-        trend_points = [
-            {**point, "baseline": traffic_threshold}
-            for point in traffic.get("points", [])
-        ] or [{"ts": now, "value": traffic_requests, "baseline": traffic_threshold}]
-    elif scheduler_error > 0:
-        status = "위험"
-        severity = "critical"
-        title = "수집 스케줄러 실행 실패"
-        summary = f"최근 분석 구간에서 수집 스케줄러 오류 {scheduler_error}건이 감지되었습니다."
-        evidence = [
-            f"실패 작업 {scheduler_error}건 / 전체 실행 {scheduler.get('total', 0)}건",
-            *scheduler.get("error_messages", []),
-        ]
-        actions = [
-            "스케줄러 예외 로그와 외부 API 연결 상태를 확인",
-            "수집 실패 구간을 재실행하고 누락된 데이터 여부를 점검",
-            "반복 실패 시 스케줄러 프로세스를 재시작하고 알림을 발송",
-        ]
-    elif api_error_rate >= 0.05:
-        status = "주의"
-        severity = "warning"
-        title = "API 오류 증가"
-        summary = f"도착 API 오류율 {api_error_rate * 100:.1f}%가 주의 기준 5%를 초과했습니다."
-        evidence = [f"오류율 {api_error_rate * 100:.1f}% (주의 기준 5%)"]
-        actions = ["오류율 추이를 점검", "실패 응답 코드를 분류해 확인"]
-    else:
-        status = "정상"
-        severity = "info"
-        title = "특이 이상 없음"
-        summary = "현재 구간에서 특이 이상이 감지되지 않았습니다."
-        evidence = ["API 오류율과 스케줄러 오류, 트래픽 요청량이 설정된 임계치 이내입니다."]
-        actions = ["현재 모니터링 상태 유지"]
-
-    anomaly_count = 0 if severity == "info" else 1
-    return {
-        "overall_status": status,
-        "today_anomaly_count": anomaly_count,
-        "latest_anomaly": {
-            "occurred_at": now,
-            "title": title,
-            "severity": severity,
-            "summary": summary,
-        },
-        "insights": [
-            {"title": title, "summary": summary}
-        ],
-        "anomalies": [
-            {"severity": severity, "title": title, "occurred_at": now, "category": "fallback"}
-        ],
-        "selected_anomaly_detail": {
-            "title": title,
-            "occurred_at": now,
-            "description": summary,
-            "evidence": evidence,
-            "recommended_actions": actions,
-        },
-        "metric_trend": {
-            "label": trend_label,
-            "points": trend_points,
-        },
-    }
+def _strip_code_fences(text: str) -> str:
+    """LLM 응답이 ```json ... ``` 코드펜스로 감싸져 있어도 안전하게 JSON 본문만 추출한다."""
+    t = str(text).strip()
+    if t.startswith("```"):
+        newline = t.find("\n")
+        if newline != -1:
+            t = t[newline + 1:]
+        if t.rstrip().endswith("```"):
+            t = t.rstrip()[:-3]
+    return t.strip()
 
 
 def store_result(state: GraphState) -> GraphState:

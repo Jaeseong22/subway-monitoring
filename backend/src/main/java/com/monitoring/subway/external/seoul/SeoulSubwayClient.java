@@ -3,10 +3,14 @@ package com.monitoring.subway.external.seoul;
 import com.monitoring.subway.external.seoul.response.SeoulSubwayResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
-import reactor.core.publisher.Mono;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
+import reactor.util.retry.Retry;
+
+import java.time.Duration;
 
 @Slf4j
 @Component
@@ -25,6 +29,10 @@ public class SeoulSubwayClient {
     private String secondaryKey;
 
     private int cycleCount = 0;
+
+    /** 재시도 최대 횟수 (5xx/429/타임아웃 등 일시적 오류에만 적용). */
+    private static final int MAX_RETRIES = 2;
+    private static final Duration RETRY_BACKOFF = Duration.ofMillis(300);
 
     public SeoulSubwayResponse getAllRealtimeArrivals(boolean isRushHour) {
         cycleCount++;
@@ -58,8 +66,10 @@ public class SeoulSubwayClient {
             }
         }
 
-        log.info("API 통합 수집 완료: {}건 (RushHour: {})", 
-                totalResponse != null ? totalResponse.realtimeArrivalList().size() : 0, isRushHour);
+        int collectedCount = (totalResponse != null && totalResponse.realtimeArrivalList() != null)
+                ? totalResponse.realtimeArrivalList().size()
+                : 0;
+        log.info("API 통합 수집 완료: {}건 (RushHour: {})", collectedCount, isRushHour);
         return totalResponse;
     }
 
@@ -72,12 +82,38 @@ public class SeoulSubwayClient {
                     .uri(url)
                     .retrieve()
                     .bodyToMono(SeoulSubwayResponse.class)
+                    .retryWhen(Retry.backoff(MAX_RETRIES, RETRY_BACKOFF)
+                            .filter(SeoulSubwayClient::isRetryable))
                     .block();
         } catch (Exception e) {
-            log.error("Failed to fetch arrival info (Range: {}-{}). Error: {}", start, end, e.getMessage());
+            // reactor는 재시도 소진 시 원인 예외를 getCause()로 감싼다.
+            Throwable cause = (e.getCause() != null) ? e.getCause() : e;
+            recordApiFailure(cause);
+            log.error("Failed to fetch arrival info (Range: {}-{}). Error: {}", start, end, cause.getMessage());
             return null;
         }
     }
 
+    /** 5xx 서버 오류, 429 Too Many Requests, 그리고 타임아웃/연결 오류만 재시도 대상으로 판단한다. */
+    private static boolean isRetryable(Throwable t) {
+        if (t instanceof WebClientResponseException e) {
+            int code = e.getStatusCode().value();
+            return code == 429 || code >= 500;
+        }
+        // 타임아웃, 연결 실패 등 응답을 받지 못한 경우
+        return true;
+    }
 
+    /**
+     * AI 이상탐지가 참조하는 http_status/error_code 필드를 MDC에 기록한다.
+     * (API_COLLECTION 로그 이벤트에 함께 실려 Elasticsearch로 전송된다.)
+     */
+    private static void recordApiFailure(Throwable cause) {
+        if (cause instanceof WebClientResponseException e) {
+            MDC.put("http_status", String.valueOf(e.getStatusCode().value()));
+            MDC.put("error_code", e.getStatusCode().toString());
+        } else {
+            MDC.put("error_code", cause.getClass().getSimpleName());
+        }
+    }
 }

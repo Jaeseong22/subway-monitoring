@@ -18,10 +18,12 @@ export const ServiceNoticeBanner: React.FC<ServiceNoticeBannerProps> = ({
 }) => {
   const [systemStatus, setSystemStatus] = useState({ currentInterval: '수집 정책 확인 중...', isOperationEnded: false });
 
+  const apiUrl = (import.meta as any).env.VITE_API_URL || 'http://localhost:8080';
+
   useEffect(() => {
     async function fetchSystemStatus() {
       try {
-        const response = await fetch('http://localhost:8080/api/v1/system/status');
+        const response = await fetch(`${apiUrl}/api/v1/system/status`);
         if (response.ok) {
           const data = await response.json();
           setSystemStatus(data);
@@ -34,7 +36,7 @@ export const ServiceNoticeBanner: React.FC<ServiceNoticeBannerProps> = ({
     fetchSystemStatus();
     const timer = setInterval(fetchSystemStatus, 60000);
     return () => clearInterval(timer);
-  }, []);
+  }, [apiUrl]);
 
   if (variant === 'inline') {
     return (

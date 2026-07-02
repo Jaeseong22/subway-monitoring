@@ -30,6 +30,63 @@ require_services() {
   fi
 }
 
+# N분 전 UTC 타임스탬프를 반환한다. macOS(BSD date)와 Linux(GNU date) 모두 지원한다.
+iso_minutes_ago() {
+  local minutes_ago="$1"
+  if date -u -v-1M '+%Y' >/dev/null 2>&1; then
+    # BSD/macOS
+    date -u -v-"$minutes_ago"M '+%Y-%m-%dT%H:%M:%SZ'
+  else
+    # GNU/Linux
+    date -u -d "-$minutes_ago minutes" '+%Y-%m-%dT%H:%M:%SZ'
+  fi
+}
+
+# N일 전 UTC 타임스탬프를 반환한다.
+iso_days_ago() {
+  local days_ago="$1"
+  if date -u -v-1d '+%Y' >/dev/null 2>&1; then
+    date -u -v-"$days_ago"d '+%Y-%m-%dT%H:%M:%SZ'
+  else
+    date -u -d "-$days_ago days" '+%Y-%m-%dT%H:%M:%SZ'
+  fi
+}
+
+# 과거 같은 시간대(hour_of_day)/평일·주말(is_weekend)의 "정상" 표본을 시딩한다.
+# AI가 이 기준선(평균±표준편차) 대비 z-score/배수로 이상탐지를 하므로, 데모가
+# 고정 임계값이 아니라 실제 통계 비교로 동작함을 보여줄 수 있다.
+seed_baseline() {
+  local hour dow isw
+  hour=$((10#$(date +%H)))
+  dow=$(date +%u)
+  if [ "$dow" -ge 6 ]; then isw="true"; else isw="false"; fi
+
+  local i rps lat p95 cpu mem fetched saved ts
+  for i in $(seq 1 14); do
+    rps=$(awk "BEGIN{printf \"%.2f\", 2.6 + ($i % 5) * 0.2}")
+    lat=$(( 40 + i % 8 ))
+    p95=$(( 80 + (i % 8) * 3 ))
+    cpu=$(( 22 + i % 7 ))
+    mem=$(( 55 + i % 6 ))
+    fetched=$(( 2850 + (i % 6) * 20 ))
+    saved=$(( 560 + (i % 6) * 6 ))
+    ts="$(iso_days_ago "$i")"
+
+    # Golden Signals 요약 (정상 표본)
+    curl -fsS -X POST "$ES_URL/$DEMO_INDEX/_doc" \
+      -H 'Content-Type: application/json' \
+      -d "{\"@timestamp\":\"$ts\",\"event_type\":\"TRAFFIC\",\"event_name\":\"golden_signals_summary\",\"success\":\"true\",\"requests_per_second\":\"$rps\",\"error_rate\":\"0.0050\",\"avg_elapsed_ms\":\"$lat\",\"p95_elapsed_ms\":\"$p95\",\"cpu_percent\":\"$cpu\",\"memory_percent\":\"$mem\",\"hour_of_day\":\"$hour\",\"is_weekend\":\"$isw\",\"service_name\":\"subway-demo\"}" \
+      >/dev/null
+
+    # 수집 메트릭 (정상 표본)
+    curl -fsS -X POST "$ES_URL/$DEMO_INDEX/_doc" \
+      -H 'Content-Type: application/json' \
+      -d "{\"@timestamp\":\"$ts\",\"event_type\":\"METRIC_COLLECTION\",\"success\":\"true\",\"fetched_total\":\"$fetched\",\"line1_saved\":\"$saved\",\"duration_ms\":\"340\",\"hour_of_day\":\"$hour\",\"is_weekend\":\"$isw\",\"service_name\":\"subway-demo\"}" \
+      >/dev/null
+  done
+  echo "Seeded baseline: 14 golden + 14 metric samples (hour=$hour, is_weekend=$isw)"
+}
+
 put_api_event() {
   local success="$1"
   local elapsed_ms="$2"
@@ -63,7 +120,7 @@ put_traffic_event() {
   local queue_depth="$5"
   local minutes_ago="$6"
   local timestamp
-  timestamp="$(date -u -v-"$minutes_ago"M '+%Y-%m-%dT%H:%M:%SZ')"
+  timestamp="$(iso_minutes_ago "$minutes_ago")"
   curl -fsS -X POST "$ES_URL/$DEMO_INDEX/_doc" \
     -H 'Content-Type: application/json' \
     -d "{\"@timestamp\":\"$timestamp\",\"event_type\":\"TRAFFIC\",\"success\":\"true\",\"endpoint\":\"/api/v1/stations/arrivals/all\",\"request_count\":\"$request_count\",\"requests_per_second\":\"$requests_per_second\",\"cpu_percent\":\"$cpu_percent\",\"memory_percent\":\"$memory_percent\",\"queue_depth\":\"$queue_depth\",\"instance_count\":\"1\",\"elapsed_ms\":\"860\",\"message\":\"Traffic saturation sample\",\"service_name\":\"subway-demo\"}" \
@@ -102,6 +159,7 @@ require_services
 case "$SCENARIO" in
   normal)
     reset_demo_index
+    seed_baseline
     for _ in {1..10}; do
       put_api_event "true" "95" "200" "NONE" "정상 응답"
     done
@@ -112,6 +170,7 @@ case "$SCENARIO" in
     ;;
   api-failure)
     reset_demo_index
+    seed_baseline
     for _ in {1..7}; do
       put_api_event "true" "112" "200" "NONE" "정상 응답"
     done
@@ -125,6 +184,7 @@ case "$SCENARIO" in
     ;;
   traffic-spike)
     reset_demo_index
+    seed_baseline
     for _ in {1..10}; do
       put_api_event "true" "140" "200" "NONE" "정상 응답"
     done
@@ -138,6 +198,7 @@ case "$SCENARIO" in
     ;;
   scheduler-failure)
     reset_demo_index
+    seed_baseline
     for _ in {1..10}; do
       put_api_event "true" "104" "200" "NONE" "정상 응답"
     done

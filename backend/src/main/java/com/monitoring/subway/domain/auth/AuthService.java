@@ -98,6 +98,20 @@ public class AuthService {
         return toAuthResponse(user);
     }
 
+    /** 로그아웃: 해당 세션 토큰을 삭제해 즉시 무효화한다. */
+    @Transactional
+    public void logout(String token) {
+        if (token != null && !token.isBlank()) {
+            authSessionRepository.deleteByToken(token);
+        }
+    }
+
+    /** 만료된 세션을 정리한다. auth_session 테이블 무한 증가를 방지한다. */
+    @Transactional
+    public long purgeExpiredSessions() {
+        return authSessionRepository.deleteByExpiresAtBefore(LocalDateTime.now());
+    }
+
     private void validateLocalUserInput(String name, String email, String password) {
         if (name == null || name.trim().length() < 2) {
             throw new IllegalArgumentException("이름은 2자 이상 입력해주세요.");

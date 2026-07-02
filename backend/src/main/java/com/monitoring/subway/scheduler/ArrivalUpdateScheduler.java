@@ -136,19 +136,23 @@ public class ArrivalUpdateScheduler {
             
             double avgCount = stationCounts.values().stream().mapToLong(Long::longValue).average().orElse(0.0);
             
+            String avgCountFormatted = String.format("%.2f", avgCount);
             stationCounts.forEach((stationName, count) -> {
-                if (count >= 6 && count > avgCount * 3) { 
+                if (count >= 6 && count > avgCount * 3) {
                     org.slf4j.MDC.put("event_type", "STATION_CONGESTION_ALERT");
                     org.slf4j.MDC.put("congestion_station", stationName);
                     org.slf4j.MDC.put("congestion_count", String.valueOf(count));
-                    org.slf4j.MDC.put("average_count", String.format("%.2f", avgCount));
-                    log.warn("🚨 [동적 혼잡 감지]: {}역에 {}대의 열차가 밀집(노선 평균: {:.2f}). 대규모 행사 가능성이 높습니다.", 
-                            stationName, count, avgCount);
+                    org.slf4j.MDC.put("average_count", avgCountFormatted);
+                    log.warn("🚨 [동적 혼잡 감지]: {}역에 {}대의 열차가 밀집(노선 평균: {}). 대규모 행사 가능성이 높습니다.",
+                            stationName, count, avgCountFormatted);
                 }
             });
 
         } catch (Exception e) {
             org.slf4j.MDC.put("event_type", "SYSTEM_FETCH_ERROR");
+            org.slf4j.MDC.put("success", "false");
+            org.slf4j.MDC.put("error_code", e.getClass().getSimpleName());
+            org.slf4j.MDC.put("error_msg", e.getMessage());
             log.error("도착 정보 수집/저장 중 오류 발생", e);
         } finally {
             org.slf4j.MDC.clear();

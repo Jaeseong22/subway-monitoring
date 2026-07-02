@@ -43,6 +43,9 @@ app:
     email: ${ADMIN_EMAIL:}
     password: ${ADMIN_PASSWORD:}
     name: ${ADMIN_NAME:관리자}
+  cors:
+    # 쉼표로 구분된 허용 오리진 목록. 운영 배포 시 실제 도메인으로 교체한다.
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}
 
 monitoring:
   golden-signals:

@@ -54,7 +54,6 @@ export const StationPreviewCard: React.FC<StationPreviewCardProps> = ({
   station,
   upArrival,
   downArrival,
-  onClose,
   isAuthenticated = false,
   isFavorite = false,
   onToggleFavorite

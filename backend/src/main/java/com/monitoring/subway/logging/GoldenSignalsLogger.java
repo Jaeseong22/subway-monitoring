@@ -40,8 +40,8 @@ public class GoldenSignalsLogger {
             MDC.put("requests_per_second", String.format("%.2f", snapshot.requestsPerSecond()));
             MDC.put("error_count", String.valueOf(snapshot.errorCount()));
             MDC.put("error_rate", String.format("%.4f", snapshot.requestCount() == 0 ? 0.0 : (double) snapshot.errorCount() / snapshot.requestCount()));
-            MDC.put("elapsed_ms", String.format("%.0f", snapshot.avgElapsedMs()));
             MDC.put("avg_elapsed_ms", String.format("%.2f", snapshot.avgElapsedMs()));
+            MDC.put("p95_elapsed_ms", String.format("%.0f", snapshot.p95ElapsedMs()));
             MDC.put("cpu_percent", String.format("%.2f", cpuPercent));
             MDC.put("memory_percent", String.format("%.2f", memoryPercent));
             MDC.put("heap_used_mb", String.valueOf(usedMemory / 1024 / 1024));
@@ -54,6 +54,7 @@ public class GoldenSignalsLogger {
             MDC.put("instance_count", "1");
             MDC.put("window_seconds", String.format("%.0f", snapshot.windowSeconds()));
             MDC.put("day_of_week", now.getDayOfWeek().name());
+            MDC.put("is_weekend", String.valueOf(now.getDayOfWeek().getValue() >= 6));
             MDC.put("hour_of_day", String.valueOf(now.getHour()));
 
             log.info("Golden signals summary collected.");

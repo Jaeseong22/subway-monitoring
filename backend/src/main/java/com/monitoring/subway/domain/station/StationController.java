@@ -9,7 +9,6 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/v1/stations")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "*") // 임시로 전체 오픈
 public class StationController {
 
     private final StationService stationService;

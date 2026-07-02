@@ -73,30 +73,59 @@ class ElasticsearchClient:
         hits = [hit.get("_source", {}) for hit in resp.get("hits", {}).get("hits", [])]
         return window, hits
 
-    def fetch_baseline_events(self, day_of_week: str, hour_of_day: str) -> list[dict[str, Any]]:
+    def fetch_baseline_events(self, hour_of_day: str, is_weekend: str) -> list[dict[str, Any]]:
+        """과거 28일 중 같은 시간대(hour_of_day) + 같은 평일/주말(is_weekend)의
+        Golden Signals 요약(TRAFFIC/golden_signals_summary)과 수집 메트릭(METRIC_COLLECTION)을
+        조회한다. 이 표본으로 신호별 평균/표준편차 기준선을 만든다.
+
+        Logstash 동적 매핑상 문자열은 분석된 text + `.keyword` 서브필드로 색인되므로
+        정확 일치 term 쿼리는 반드시 `.keyword`를 대상으로 한다.
+        """
         resp = self.client.search(
             index=self.log_index_pattern,
-            size=2000,
+            size=5000,
             query={
                 "bool": {
                     "filter": [
-                        {"term": {"event_type": "METRIC_COLLECTION"}},
-                        {"term": {"day_of_week": day_of_week}},
-                        {"term": {"hour_of_day": hour_of_day}},
+                        {"term": {"hour_of_day.keyword": hour_of_day}},
+                        {"term": {"is_weekend.keyword": is_weekend}},
                         {"range": {"@timestamp": {"gte": "now-28d/d"}}},
+                        {
+                            "bool": {
+                                "should": [
+                                    {"term": {"event_type.keyword": "METRIC_COLLECTION"}},
+                                    {
+                                        "bool": {
+                                            "filter": [
+                                                {"term": {"event_type.keyword": "TRAFFIC"}},
+                                                {"term": {"event_name.keyword": "golden_signals_summary"}},
+                                            ]
+                                        }
+                                    },
+                                ],
+                                "minimum_should_match": 1,
+                            }
+                        },
                     ]
                 }
             },
             _source=[
                 "@timestamp",
-                "up_count",
-                "down_count",
+                "event_type",
+                "event_name",
+                "is_weekend",
+                "hour_of_day",
+                # Golden Signals 요약 지표 (rate/ratio/point → 창 길이 무관 비교 가능)
+                "requests_per_second",
+                "error_rate",
+                "avg_elapsed_ms",
+                "p95_elapsed_ms",
+                "cpu_percent",
+                "memory_percent",
+                # 수집 메트릭
                 "fetched_total",
                 "line1_saved",
                 "duration_ms",
-                "time_category",
-                "day_of_week",
-                "hour_of_day",
             ],
         )
         return [hit.get("_source", {}) for hit in resp.get("hits", {}).get("hits", [])]
