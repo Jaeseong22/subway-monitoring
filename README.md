@@ -424,6 +424,28 @@ cd ai_service && python3 tests/test_remediation.py
 
 `backend/Dockerfile`의 `-x test`는 의도적으로 유지했습니다 — 테스트는 CI에서 DB를 붙여 실행하고, 이미지 빌드는 산출물 생성에만 집중하는 것이 표준적인 분리입니다.
 
+### 컨테이너 이미지
+
+공개 이미지이므로 로그인 없이 받을 수 있습니다.
+
+```bash
+docker pull ghcr.io/jaeseong22/subway-monitoring/backend:0.2.0
+docker pull ghcr.io/jaeseong22/subway-monitoring/frontend:0.2.0
+docker pull ghcr.io/jaeseong22/subway-monitoring/ai-service:0.2.0
+```
+
+태그는 `0.2.0`(정확한 버전), `0.2`(마이너), `latest`, `sha-<커밋>` 형태로 제공됩니다.
+
+> **`linux/amd64` 전용입니다.** GitHub Actions 러너가 amd64이고 멀티플랫폼 빌드는 QEMU 에뮬레이션이라 릴리스가 크게 느려져서, 배포 대상(리눅스 서버)에 맞춰 amd64만 발행합니다.
+>
+> Apple Silicon Mac에서는 그냥 `docker pull`이 `no matching manifest for linux/arm64` 로 실패하므로 플랫폼을 명시해야 합니다. Rosetta 에뮬레이션으로 동작하며 네이티브보다 느립니다.
+>
+> ```bash
+> docker pull --platform linux/amd64 ghcr.io/jaeseong22/subway-monitoring/backend:0.2.0
+> ```
+>
+> Mac에서 로컬 개발할 때는 이미지를 받지 말고 `docker compose up -d --build`로 직접 빌드하는 편이 빠릅니다(네이티브 arm64로 빌드됩니다).
+
 ## 이상탐지 데모
 
 발표나 검증을 위해 합성 로그와 이상탐지 결과를 생성할 수 있습니다.
