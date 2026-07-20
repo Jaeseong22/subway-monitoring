@@ -66,6 +66,47 @@ export interface AdminSummary {
   latestAnomalyAt: string;
 }
 
+/** 자동 대응 조치의 상태 기계. 백엔드 RemediationActionDto와 동일하다. */
+export type RemediationStatus =
+  | 'PENDING'
+  | 'APPROVED'
+  | 'REJECTED'
+  | 'EXECUTING'
+  | 'EXECUTED'
+  | 'SUCCEEDED'
+  | 'FAILED'
+  | 'ROLLED_BACK'
+  | 'EXPIRED';
+
+export interface RemediationHistoryEntry {
+  at: string;
+  status: string;
+  note: string;
+}
+
+export interface RemediationAction {
+  id: string;
+  status: RemediationStatus | string;
+  /** scale_out | scale_in */
+  kind: string;
+  reason: string;
+  service: string;
+  fromReplicas: number | null;
+  toReplicas: number | null;
+  createdAt: string;
+  executedAt: string;
+  triggerTitle: string;
+  signalKeys: string[];
+  evidence: string[];
+  history: RemediationHistoryEntry[];
+  /** 상한 도달 등 자동으로는 대응할 수 없어 기록만 남긴 조치 */
+  blocked: boolean;
+  /** 실패한 조치를 되돌리는 역방향 조치 */
+  rollback: boolean;
+  /** 워커가 dry-run 모드로 실행했는지 */
+  dryRun: boolean;
+}
+
 export interface FavoriteStation {
   stationId: string;
   stationName: string;
