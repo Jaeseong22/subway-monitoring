@@ -6,7 +6,7 @@ import { StationPreviewCard } from '../components/StationPreviewCard';
 import { RouteMap } from '../components/RouteMap';
 import { ServiceNoticeBanner } from '../components/ServiceNoticeBanner';
 import { UpdateStatusBadge } from '../components/UpdateStatusBadge';
-import { stations } from '../data/mockData';
+import { useStations } from '../hooks/useStations';
 import { Station } from '../types';
 import { getFirstArrival } from '../utils/arrival';
 import { AnimatePresence } from 'framer-motion';
@@ -20,6 +20,7 @@ export const MainPage: React.FC = () => {
   const [selectedStation, setSelectedStation] = useState<Station | null>(null);
   const navigate = useNavigate();
   const { allArrivals, isLoading } = useGlobalArrivals();
+  const { stations } = useStations();
   const { isAuthenticated } = useAuth();
   const { favorites, isFavorite, toggleFavorite } = useFavoriteStations();
   const { alerts } = useArrivalAlerts();

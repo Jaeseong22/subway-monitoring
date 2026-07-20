@@ -16,7 +16,7 @@ public class StationService {
     private final StationRepository stationRepository;
 
     public List<StationResponse> getAllStations() {
-        return stationRepository.findAll().stream()
+        return stationRepository.findAllByOrderByLineOrderAsc().stream()
                 .map(StationResponse::from)
                 .collect(Collectors.toList());
     }
@@ -25,7 +25,7 @@ public class StationService {
         if (keyword == null || keyword.isBlank()) {
             return getAllStations();
         }
-        return stationRepository.findByNameContaining(keyword).stream()
+        return stationRepository.findByNameContainingOrderByLineOrderAsc(keyword).stream()
                 .map(StationResponse::from)
                 .collect(Collectors.toList());
     }
