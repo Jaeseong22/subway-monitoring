@@ -1,0 +1,62 @@
+name: Release
+
+# 태그를 밀면 컨테이너 이미지를 빌드해 GitHub Container Registry(GHCR)에 올린다.
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# GHCR은 GITHUB_TOKEN으로 인증되므로 추가 시크릿이 필요 없다.
+# 실제 서버 배포(예: ssh + docker compose pull && up -d)는 배포 대상이 정해진 뒤
+# deploy 잡을 추가한다. 대상 없이 배포 단계를 넣으면 항상 실패하는 잡이 된다.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  images:
+    name: Build and push images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: backend
+            context: ./backend
+          - name: frontend
+            context: ./frontend
+          - name: ai-service
+            context: ./ai_service
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.name }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

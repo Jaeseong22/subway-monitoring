@@ -76,3 +76,4 @@ line1_full_mapping.txt
 *.snapshot
 *.dump
 *.sql
+docs/db-final-handout.txt
