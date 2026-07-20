@@ -11,6 +11,7 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 import reactor.util.retry.Retry;
 
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Slf4j
 @Component
@@ -28,15 +29,20 @@ public class SeoulSubwayClient {
     @Value("${subway.api.key-secondary}")
     private String secondaryKey;
 
-    private int cycleCount = 0;
+    /**
+     * 페이지 격차 수집(평시 2페이지 격턴 수집)을 위한 사이클 카운터.
+     * SchedulerPolicy와 마찬가지로 인스턴스 로컬 상태이므로, 수집은 단일 프로세스에서만 수행한다.
+     */
+    private final AtomicLong cycleCount = new AtomicLong();
 
     /** 재시도 최대 횟수 (5xx/429/타임아웃 등 일시적 오류에만 적용). */
     private static final int MAX_RETRIES = 2;
     private static final Duration RETRY_BACKOFF = Duration.ofMillis(300);
 
     public SeoulSubwayResponse getAllRealtimeArrivals(boolean isRushHour) {
-        cycleCount++;
-        
+        // 한 번만 읽어 이 호출 안에서 일관된 사이클 번호를 사용한다.
+        long cycle = cycleCount.incrementAndGet();
+
         // 1. 상행 주력 데이터 (Page 1: 0-999) - Primary 키 담당
         SeoulSubwayResponse totalResponse = fetchWithRetry(primaryKey, 0, 999);
         if (totalResponse == null || totalResponse.realtimeArrivalList() == null) {
@@ -53,9 +59,9 @@ public class SeoulSubwayClient {
             }
 
             // 3. 중간 데이터 (Page 2: 1001-2000) - 출퇴근 시 필수, 평시에는 격차 수집 (한도 최적화)
-            boolean shouldFetchPage2 = isRushHour || (cycleCount % 2 == 0);
+            boolean shouldFetchPage2 = isRushHour || (cycle % 2 == 0);
             if (shouldFetchPage2) {
-                String keyForPage2 = (cycleCount % 2 == 0) ? primaryKey : secondaryKey;
+                String keyForPage2 = (cycle % 2 == 0) ? primaryKey : secondaryKey;
                 SeoulSubwayResponse page2 = fetchWithRetry(keyForPage2, 1001, 2000);
                 if (page2 != null && page2.realtimeArrivalList() != null) {
                     totalResponse.realtimeArrivalList().addAll(page2.realtimeArrivalList());

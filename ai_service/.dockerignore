@@ -1,0 +1,14 @@
+# 로컬 가상환경(139MB)이 빌드 컨텍스트로 통째로 들어가면 빌드가 크게 느려지고
+# 컨테이너 안에 호스트용 바이너리가 섞인다.
+.venv/
+venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+
+# 이미지에 필요 없는 것들
+tests/
+scripts/
+README.md
+.env
+.env.*

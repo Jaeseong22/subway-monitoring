@@ -1,0 +1,158 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 같은 브랜치에서 새 푸시가 오면 진행 중인 실행을 취소한다.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (build + test)
+    runs-on: ubuntu-latest
+    services:
+      # contextLoads()가 JPA EntityManagerFactory를 만들면서 실제 DB 연결을 요구한다.
+      # 로컬에서 MySQL 없이 돌리면 이 테스트만 실패하므로 CI에서는 서비스 컨테이너를 띄운다.
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: subway_monitoring
+          MYSQL_USER: subway
+          MYSQL_PASSWORD: subway123
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: gradle
+
+      - name: Build and test
+        working-directory: backend
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: '3306'
+          DB_NAME: subway_monitoring
+          DB_USER: subway
+          DB_PASSWORD: subway123
+          # 테스트 중에 외부 API를 호출하거나 수집 스케줄러가 도는 것을 막는다.
+          APP_SCHEDULER_ENABLED: 'false'
+          SUBWAY_API_KEY: ci-dummy
+          SUBWAY_API_KEY_SECONDARY: ci-dummy
+        run: ./gradlew build --no-daemon
+
+      - name: Upload test report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-report
+          path: backend/build/reports/tests/test
+          retention-days: 7
+
+  ai-service:
+    name: AI service (tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Unit tests
+        working-directory: ai_service
+        # detection / remediation / llm_merge는 서드파티 의존성 없이 동작하도록 분리돼 있어
+        # requirements.txt 설치 없이 그대로 실행된다.
+        run: |
+          python tests/test_detection.py
+          python tests/test_remediation.py
+
+      - name: Import check (with dependencies)
+        working-directory: ai_service
+        run: |
+          pip install --quiet -r requirements.txt
+          python -c "import graph.agent, es_client, remediation_worker; print('imports ok')"
+
+  frontend:
+    name: Frontend (typecheck + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        working-directory: frontend
+        run: npm ci
+
+      - name: Lint
+        working-directory: frontend
+        # 기존 코드의 린트 위반이 남아 있을 수 있어 우선 리포트만 한다.
+        # 정리가 끝나면 continue-on-error를 제거해 게이트로 승격할 것.
+        continue-on-error: true
+        run: npm run lint
+
+      - name: Build (runs tsc --noEmit first)
+        working-directory: frontend
+        run: npm run build
+
+  images:
+    name: Docker images build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: backend
+            context: ./backend
+          - name: frontend
+            context: ./frontend
+          - name: ai-service
+            context: ./ai_service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build ${{ matrix.name }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  compose:
+    name: Compose config validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate base compose
+        run: docker compose -f docker-compose.yml config --quiet
+
+      - name: Validate scale overlay
+        run: docker compose -f docker-compose.yml -f docker-compose.scale.yml config --quiet
+
+      - name: Assert scaled topology
+        # 확장 구성에서 API 인스턴스는 스케줄러가 꺼져 있고 수집기만 켜져 있어야 한다.
+        # 이게 뒤집히면 외부 API를 중복 호출하고 도착정보를 서로 지운다.
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.scale.yml config > /tmp/scaled.yml
+          python3 scripts/assert_scaled_topology.py /tmp/scaled.yml
