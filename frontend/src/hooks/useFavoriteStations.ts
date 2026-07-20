@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { FavoriteStation } from '../types';
+import { API_BASE } from '../utils/api';
 
-const apiUrl = () => (import.meta as any).env.VITE_API_URL || 'http://localhost:8080';
 
 export const useFavoriteStations = () => {
   const { token, isAuthenticated } = useAuth();
@@ -20,7 +20,7 @@ export const useFavoriteStations = () => {
     }
     setIsLoading(true);
     try {
-      const response = await fetch(`${apiUrl()}/api/v1/users/me/favorites`, { headers });
+      const response = await fetch(`${API_BASE}/api/v1/users/me/favorites`, { headers });
       if (response.ok) {
         setFavorites(await response.json());
       }
@@ -43,7 +43,7 @@ export const useFavoriteStations = () => {
       return;
     }
     const method = isFavorite(stationId) ? 'DELETE' : 'POST';
-    const response = await fetch(`${apiUrl()}/api/v1/users/me/favorites/${stationId}`, {
+    const response = await fetch(`${API_BASE}/api/v1/users/me/favorites/${stationId}`, {
       method,
       headers
     });

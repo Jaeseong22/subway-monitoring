@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Station } from '../types';
+import { API_BASE } from '../utils/api';
 
-const apiBase = () =>
-  (import.meta as any).env.VITE_API_URL || 'http://localhost:8080';
 
 /**
  * 역 마스터 데이터를 백엔드에서 가져온다.
@@ -20,7 +19,7 @@ const loadStations = (): Promise<Station[]> => {
   if (cache) return Promise.resolve(cache);
   if (inflight) return inflight;
 
-  inflight = fetch(`${apiBase()}/api/v1/stations`).
+  inflight = fetch(`${API_BASE}/api/v1/stations`).
   then((res) => {
     if (!res.ok) throw new Error(`역 정보를 불러오지 못했습니다 (HTTP ${res.status})`);
     return res.json();

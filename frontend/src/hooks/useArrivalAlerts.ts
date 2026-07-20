@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { ArrivalAlert } from '../types';
+import { API_BASE } from '../utils/api';
 
-const apiUrl = () => (import.meta as any).env.VITE_API_URL || 'http://localhost:8080';
 
 export const useArrivalAlerts = () => {
   const { token } = useAuth();
@@ -20,7 +20,7 @@ export const useArrivalAlerts = () => {
     }
     setIsLoading(true);
     try {
-      const response = await fetch(`${apiUrl()}/api/v1/users/me/arrival-alerts`, { headers });
+      const response = await fetch(`${API_BASE}/api/v1/users/me/arrival-alerts`, { headers });
       if (response.ok) {
         setAlerts(await response.json());
       }

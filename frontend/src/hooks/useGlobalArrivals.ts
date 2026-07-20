@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { ArrivalInfo } from '../types';
+import { API_BASE } from '../utils/api';
 
 export const useGlobalArrivals = () => {
   const [allArrivals, setAllArrivals] = useState<ArrivalInfo[]>([]);
@@ -9,8 +10,7 @@ export const useGlobalArrivals = () => {
   const fetchAllArrivals = async () => {
     setIsLoading(true);
     try {
-      const apiUrl = (import.meta as any).env.VITE_API_URL || 'http://localhost:8080';
-      const response = await fetch(`${apiUrl}/api/v1/stations/arrivals/all`);
+      const response = await fetch(`${API_BASE}/api/v1/stations/arrivals/all`);
       if (!response.ok) {
         throw new Error('Failed to fetch global arrival info');
       }
