@@ -15,6 +15,12 @@ services:
       MYSQL_USER: subway
       MYSQL_PASSWORD: subway123
       TZ: Asia/Seoul
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     ports:
       - "127.0.0.1:3307:3306"
     volumes:
@@ -89,7 +95,9 @@ services:
       - LOGSTASH_HOST=logstash:50000
       - ELASTICSEARCH_URL=http://elasticsearch:9200
       - ANOMALY_INDEX=subway-anomaly-results
+      - REMEDIATION_INDEX=subway-remediation-actions
       - SUBWAY_API_KEY=${SUBWAY_API_KEY:-sample}
+      - SUBWAY_API_KEY_SECONDARY=${SUBWAY_API_KEY_SECONDARY:-sample}
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
       - ADMIN_EMAIL=${ADMIN_EMAIL:-}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
@@ -98,8 +106,17 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:
-      - mysql
-      - logstash
+      mysql:
+        condition: service_healthy
+      logstash:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/actuator/health/readiness"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      # JVM 기동 + 초기 수집이 끝날 시간을 준다.
+      start_period: 60s
     mem_limit: 768m
     logging: *default-logging
     networks:
@@ -134,10 +151,20 @@ services:
       - ELASTICSEARCH_URL=http://elasticsearch:9200
       - LOG_INDEX_PATTERN=subway-logs-*
       - ANOMALY_INDEX=subway-anomaly-results
+      - REMEDIATION_INDEX=subway-remediation-actions
+      # 자동 대응: 제안만 생성한다. 실제 실행은 호스트의 remediation_worker.py가 담당한다.
+      - REMEDIATION_ENABLED=${REMEDIATION_ENABLED:-true}
+      - REMEDIATION_AUTO_APPROVE=${REMEDIATION_AUTO_APPROVE:-false}
+      - REMEDIATION_MAX_REPLICAS=${REMEDIATION_MAX_REPLICAS:-4}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - RUN_TIMES=${RUN_TIMES:-08:00,18:00}
+      # 상시 관측: 기본 5분 간격. RUN_TIMES를 설정하면 고정 시각 모드로 동작한다.
+      - RUN_INTERVAL_MINUTES=${RUN_INTERVAL_MINUTES:-5}
+      - RUN_TIMES=${RUN_TIMES:-}
       - RUN_ON_STARTUP=${RUN_ON_STARTUP:-true}
       - MISFIRE_GRACE_SECONDS=${MISFIRE_GRACE_SECONDS:-3600}
+      - LOOKBACK_MINUTES=${LOOKBACK_MINUTES:-10}
+      # 디바운스: 연속 N회 감지되어야 확정 알람으로 승격 (플래핑 방지)
+      - ANOMALY_CONSECUTIVE_N=${ANOMALY_CONSECUTIVE_N:-2}
       - TZ=Asia/Seoul
     depends_on:
       - elasticsearch

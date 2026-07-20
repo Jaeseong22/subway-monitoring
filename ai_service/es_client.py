@@ -1,6 +1,6 @@
 import os
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from elasticsearch import Elasticsearch
@@ -17,10 +17,11 @@ class ElasticsearchClient:
         self.url = os.getenv("ELASTICSEARCH_URL", "http://localhost:9200")
         self.log_index_pattern = os.getenv("LOG_INDEX_PATTERN", "subway-logs-*")
         self.anomaly_index = os.getenv("ANOMALY_INDEX", "subway-anomaly-results")
+        self.action_index = os.getenv("REMEDIATION_INDEX", "subway-remediation-actions")
         self.client = Elasticsearch(self.url, request_timeout=30)
 
     def _window(self, lookback_minutes: int) -> AnalysisWindow:
-        end = datetime.utcnow()
+        end = datetime.now(timezone.utc)
         start = end - timedelta(minutes=lookback_minutes)
         return AnalysisWindow(start=start, end=end)
 
@@ -29,6 +30,9 @@ class ElasticsearchClient:
         resp = self.client.search(
             index=self.log_index_pattern,
             size=2000,
+            # 정렬을 지정하지 않으면 ES는 순서를 보장하지 않는다. size 상한에 걸릴 때
+            # 임의 부분집합이 아니라 '최신 N건'이 오도록 명시한다.
+            sort=[{"@timestamp": {"order": "desc"}}],
             query={
                 "bool": {
                     "filter": [
@@ -54,6 +58,8 @@ class ElasticsearchClient:
                 "cpu_percent",
                 "memory_percent",
                 "instance_count",
+                "instance_id",
+                "instance_role",
                 "queue_depth",
                 "up_count",
                 "down_count",
@@ -130,5 +136,59 @@ class ElasticsearchClient:
         )
         return [hit.get("_source", {}) for hit in resp.get("hits", {}).get("hits", [])]
 
+    def fetch_recent_detected_keys(self, size: int) -> list[list[str]]:
+        """직전 분석 실행들이 감지한 신호 key 목록을 최신순으로 반환한다.
+
+        디바운스(연속 N회 감지 시에만 확정)를 위해 별도 상태 저장소를 두지 않고
+        이미 저장 중인 이상탐지 결과 인덱스를 이력으로 재사용한다.
+        인덱스가 아직 없으면 빈 목록을 반환한다.
+        """
+        if size <= 0:
+            return []
+        if not self.client.indices.exists(index=self.anomaly_index):
+            return []
+        resp = self.client.search(
+            index=self.anomaly_index,
+            size=size,
+            sort=[{"@timestamp": {"order": "desc"}}],
+            query={"match_all": {}},
+            _source=["result.detected_keys"],
+        )
+        history = []
+        for hit in resp.get("hits", {}).get("hits", []):
+            result = (hit.get("_source", {}) or {}).get("result", {}) or {}
+            keys = result.get("detected_keys")
+            history.append([str(k) for k in keys] if isinstance(keys, list) else [])
+        return history
+
     def save_anomaly_result(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.client.index(index=self.anomaly_index, document=payload)
+
+    # ---------------------------------------------------------------- 자동 대응
+    def fetch_recent_actions(self, size: int = 20) -> list[dict[str, Any]]:
+        """최근 자동 대응 조치를 최신순으로 조회한다(쿨다운·중복 제안 판정에 사용)."""
+        if not self.client.indices.exists(index=self.action_index):
+            return []
+        resp = self.client.search(
+            index=self.action_index,
+            size=size,
+            sort=[{"created_at": {"order": "desc"}}],
+            query={"match_all": {}},
+        )
+        actions = []
+        for hit in resp.get("hits", {}).get("hits", []):
+            action = dict(hit.get("_source", {}) or {})
+            action["action_id"] = hit.get("_id")
+            actions.append(action)
+        return actions
+
+    def save_action(self, action: dict[str, Any]) -> str:
+        """새 조치를 저장하고 생성된 문서 id를 반환한다."""
+        payload = {k: v for k, v in action.items() if k != "action_id"}
+        payload.setdefault("@timestamp", payload.get("created_at"))
+        resp = self.client.index(index=self.action_index, document=payload, refresh=True)
+        return resp.get("_id")
+
+    def update_action(self, action_id: str, action: dict[str, Any]) -> None:
+        payload = {k: v for k, v in action.items() if k != "action_id"}
+        self.client.index(index=self.action_index, id=action_id, document=payload, refresh=True)

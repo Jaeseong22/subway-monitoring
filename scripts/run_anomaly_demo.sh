@@ -8,6 +8,7 @@ PYTHON_BIN="$AI_DIR/.venv/bin/python"
 ES_URL="${ELASTICSEARCH_URL:-http://localhost:9200}"
 DEMO_INDEX="${DEMO_INDEX:-subway-demo-logs}"
 RESULT_INDEX="${ANOMALY_INDEX:-subway-anomaly-results}"
+ACTION_INDEX="${REMEDIATION_INDEX:-subway-remediation-actions}"
 SCENARIO="${1:-}"
 
 usage() {
@@ -56,11 +57,26 @@ iso_days_ago() {
 # AI가 이 기준선(평균±표준편차) 대비 z-score/배수로 이상탐지를 하므로, 데모가
 # 고정 임계값이 아니라 실제 통계 비교로 동작함을 보여줄 수 있다.
 seed_baseline() {
-  local hour dow isw
-  hour=$((10#$(date +%H)))
+  local dow isw
   dow=$(date +%u)
   if [ "$dow" -ge 6 ]; then isw="true"; else isw="false"; fi
 
+  # 분석 창의 '중앙 시각'이 기준선 시간 버킷을 결정하므로(직전 30분 → 약 15분 전),
+  # 현재 시(hour)와 직전 시를 모두 시딩해 정시 근처에서 실행해도 기준선이 잡히게 한다.
+  local now_hour prev_hour
+  now_hour=$((10#$(date +%H)))
+  prev_hour=$(( (now_hour + 23) % 24 ))
+
+  local hour
+  for hour in "$now_hour" "$prev_hour"; do
+    seed_baseline_hour "$hour" "$isw"
+  done
+  echo "Seeded baseline: hours=$now_hour,$prev_hour is_weekend=$isw (각 14 golden + 14 metric 표본)"
+}
+
+seed_baseline_hour() {
+  local hour="$1"
+  local isw="$2"
   local i rps lat p95 cpu mem fetched saved ts
   for i in $(seq 1 14); do
     rps=$(awk "BEGIN{printf \"%.2f\", 2.6 + ($i % 5) * 0.2}")
@@ -84,7 +100,6 @@ seed_baseline() {
       -d "{\"@timestamp\":\"$ts\",\"event_type\":\"METRIC_COLLECTION\",\"success\":\"true\",\"fetched_total\":\"$fetched\",\"line1_saved\":\"$saved\",\"duration_ms\":\"340\",\"hour_of_day\":\"$hour\",\"is_weekend\":\"$isw\",\"service_name\":\"subway-demo\"}" \
       >/dev/null
   done
-  echo "Seeded baseline: 14 golden + 14 metric samples (hour=$hour, is_weekend=$isw)"
 }
 
 put_api_event() {
@@ -123,7 +138,7 @@ put_traffic_event() {
   timestamp="$(iso_minutes_ago "$minutes_ago")"
   curl -fsS -X POST "$ES_URL/$DEMO_INDEX/_doc" \
     -H 'Content-Type: application/json' \
-    -d "{\"@timestamp\":\"$timestamp\",\"event_type\":\"TRAFFIC\",\"success\":\"true\",\"endpoint\":\"/api/v1/stations/arrivals/all\",\"request_count\":\"$request_count\",\"requests_per_second\":\"$requests_per_second\",\"cpu_percent\":\"$cpu_percent\",\"memory_percent\":\"$memory_percent\",\"queue_depth\":\"$queue_depth\",\"instance_count\":\"1\",\"elapsed_ms\":\"860\",\"message\":\"Traffic saturation sample\",\"service_name\":\"subway-demo\"}" \
+    -d "{\"@timestamp\":\"$timestamp\",\"event_type\":\"TRAFFIC\",\"event_name\":\"golden_signals_summary\",\"success\":\"true\",\"endpoint\":\"/api/v1/stations/arrivals/all\",\"request_count\":\"$request_count\",\"requests_per_second\":\"$requests_per_second\",\"cpu_percent\":\"$cpu_percent\",\"memory_percent\":\"$memory_percent\",\"queue_depth\":\"$queue_depth\",\"instance_count\":\"1\",\"avg_elapsed_ms\":\"860\",\"p95_elapsed_ms\":\"1420\",\"elapsed_ms\":\"860\",\"message\":\"Traffic saturation sample\",\"service_name\":\"subway-demo\"}" \
     >/dev/null
 }
 
@@ -147,11 +162,40 @@ run_analysis() {
     ELASTICSEARCH_URL="$ES_URL" \
     LOG_INDEX_PATTERN="$input_pattern" \
     ANOMALY_INDEX="$RESULT_INDEX" \
+    REMEDIATION_INDEX="$ACTION_INDEX" \
     LOOKBACK_MINUTES=30 \
     ANALYSIS_MODE=rules \
+    ANOMALY_CONSECUTIVE_N=1 \
+    REMEDIATION_COOLDOWN_MINUTES="${DEMO_COOLDOWN_MINUTES:-0}" \
       "$PYTHON_BIN" -c 'from main import run_once; run_once()'
   )
   curl -fsS -X POST "$ES_URL/$RESULT_INDEX/_refresh" >/dev/null
+}
+
+# 이번 시나리오로 만들어진 자동 대응 제안을 출력한다.
+show_proposed_action() {
+  local hits
+  hits="$(curl -fsS "$ES_URL/$ACTION_INDEX/_search?size=1&sort=created_at:desc" 2>/dev/null || true)"
+  if [[ -z "$hits" ]]; then
+    return
+  fi
+  "$PYTHON_BIN" - "$hits" <<'PY' || true
+import json, sys
+try:
+    hits = json.loads(sys.argv[1]).get("hits", {}).get("hits", [])
+except (ValueError, IndexError):
+    sys.exit(0)
+if not hits:
+    sys.exit(0)
+doc = hits[0]["_source"]
+params = doc.get("params", {})
+print("\n[자동 대응 제안]")
+print(f"  상태     : {doc.get('status')}")
+print(f"  조치     : {doc.get('kind')} ({params.get('from_replicas')}대 → {params.get('to_replicas')}대)")
+print(f"  사유     : {doc.get('reason')}")
+print(f"  문서 ID  : {hits[0]['_id']}")
+print("  승인     : POST /api/v1/admin/remediation/{id}/approve (관리자 토큰 필요)")
+PY
 }
 
 require_services
@@ -195,6 +239,7 @@ case "$SCENARIO" in
     add_metric_event
     run_analysis "$DEMO_INDEX"
     echo "Demo published: 위험 (트래픽 급증 / 수평 확장 권고)"
+    show_proposed_action
     ;;
   scheduler-failure)
     reset_demo_index
