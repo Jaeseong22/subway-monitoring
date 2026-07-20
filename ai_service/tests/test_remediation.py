@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from graph import remediation  # noqa: E402
+from graph import detection, remediation  # noqa: E402
 
 NOW = datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
 NOW_ISO = NOW.isoformat()
@@ -125,8 +125,7 @@ class InstanceCountTest(unittest.TestCase):
     """가동 API 인스턴스 수 집계 — 자동 확장 판단의 입력이므로 정확해야 한다."""
 
     def setUp(self):
-        from graph import agent  # noqa: PLC0415 - 선택적 의존성(langchain)이 있어야 임포트된다
-        self.count = agent._count_api_instances
+        self.count = detection.count_api_instances
 
     def golden(self, instance_id, role="api", minute="2026-07-20T12:05"):
         return {"@timestamp": f"{minute}:00.000Z", "instance_id": instance_id,

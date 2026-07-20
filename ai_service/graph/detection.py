@@ -111,6 +111,38 @@ def compute_baseline_stats(events: list[dict[str, Any]]) -> dict[str, Any]:
     return stats
 
 
+def count_api_instances(golden_events: list[dict[str, Any]]) -> int:
+    """가동 중인 **API 인스턴스** 수. 자동 확장 판단의 입력이므로 정확해야 한다.
+
+    두 가지를 걸러내야 한다:
+    1. 수집 전용 프로세스(collector)도 같은 앱이라 골든시그널을 남기지만, 로드밸런서
+       뒤에 있지 않으므로 확장 대상이 아니다. `instance_role`로 제외한다.
+    2. 재시작·축소된 인스턴스의 지표가 분석 창(수 분)에 남아 있어 그대로 세면 과다 집계된다.
+       가장 최근 1분 버킷에 지표를 남긴 인스턴스만 "지금 살아 있는" 것으로 본다.
+    """
+    api_events = [e for e in golden_events
+                  if str(e.get("instance_role") or "api").lower() != "collector"]
+    if not api_events:
+        return 0
+
+    # 분 단위(YYYY-MM-DDTHH:MM)로 잘라 가장 최근 버킷에 살아 있던 인스턴스만 센다.
+    stamped = [e for e in api_events if e.get("@timestamp") and e.get("instance_id")]
+    if stamped:
+        latest_bucket = max(str(e["@timestamp"])[:16] for e in stamped)
+        live = {str(e["instance_id"]) for e in stamped
+                if str(e["@timestamp"])[:16] == latest_bucket}
+        if live:
+            return len(live)
+
+    # 타임스탬프가 없으면 창 전체의 서로 다른 id 개수로 대체한다.
+    ids = {str(e["instance_id"]) for e in api_events if e.get("instance_id")}
+    if ids:
+        return len(ids)
+
+    # instance_id를 남기지 않는 구버전 로그와의 호환.
+    return int(max((_f(e.get("instance_count")) for e in api_events), default=0.0))
+
+
 def _config() -> dict[str, float]:
     def g(key: str, default: str) -> float:
         return float(os.getenv(key, default))
