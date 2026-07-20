@@ -6,6 +6,7 @@ import com.monitoring.subway.external.seoul.SeoulSubwayClient;
 import com.monitoring.subway.external.seoul.response.SeoulSubwayResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -16,8 +17,21 @@ import java.time.LocalTime;
 import java.util.List;
 import java.util.stream.Collectors;
 
+/**
+ * 서울 열린데이터 API에서 실시간 도착정보를 수집한다.
+ *
+ * <p><b>단일 인스턴스 전용.</b> 이 빈이 여러 인스턴스에서 동시에 동작하면
+ * <ul>
+ *   <li>외부 API를 인스턴스 수만큼 중복 호출해 일일 쿼터를 소진하고</li>
+ *   <li>{@code deleteAllInBatch()} 후 재삽입하는 특성상 인스턴스끼리 서로가 방금 쓴
+ *       데이터를 지워 사용자가 빈 결과를 받는다.</li>
+ * </ul>
+ * 따라서 API 서버를 수평 확장할 때는 {@code app.scheduler.enabled=false}로 두고,
+ * 수집 전용 프로세스 하나만 {@code true}로 실행한다.
+ */
 @Slf4j
 @Component
+@ConditionalOnProperty(name = "app.scheduler.enabled", havingValue = "true", matchIfMissing = true)
 @RequiredArgsConstructor
 public class ArrivalUpdateScheduler {
 

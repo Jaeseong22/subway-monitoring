@@ -81,7 +81,9 @@ public class RequestTrafficMetrics {
         while ((sample = latencySamples.poll()) != null) {
             samples.add(sample);
         }
-        latencySampleCount.set(0);
+        // set(0)으로 덮어쓰면 드레인 도중 들어온 표본의 카운트가 유실된다.
+        // 실제로 빼낸 개수만큼만 차감해 큐 길이와 카운터가 어긋나지 않게 한다.
+        latencySampleCount.updateAndGet(current -> Math.max(current - samples.size(), 0));
         if (samples.isEmpty()) {
             return 0.0;
         }

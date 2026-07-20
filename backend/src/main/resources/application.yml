@@ -18,9 +18,29 @@ spring:
 server:
   port: 8080
 
+# 로드밸런서/컨테이너 헬스체크용 엔드포인트.
+# - /actuator/health/readiness : 트래픽을 받아도 되는 상태인지 (LB 편입 판단)
+# - /actuator/health/liveness   : 프로세스가 살아있는지 (재시작 판단)
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+
 elasticsearch:
   url: ${ELASTICSEARCH_URL:http://localhost:9200}
   anomaly-index: ${ANOMALY_INDEX:subway-anomaly-results}
+  remediation-index: ${REMEDIATION_INDEX:subway-remediation-actions}
 
 logging:
   level:
@@ -39,6 +59,11 @@ google:
     client-id: ${GOOGLE_CLIENT_ID:}
 
 app:
+  # 수집/정리 스케줄러 실행 여부.
+  # API 서버를 수평 확장할 때는 API 인스턴스를 false로 두고,
+  # 수집 전용 프로세스 하나만 true로 실행한다(외부 API 중복 호출·데이터 삭제 경합 방지).
+  scheduler:
+    enabled: ${APP_SCHEDULER_ENABLED:true}
   admin:
     email: ${ADMIN_EMAIL:}
     password: ${ADMIN_PASSWORD:}

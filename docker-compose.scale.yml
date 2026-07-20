@@ -1,0 +1,88 @@
+# 수평 확장 오버레이 (opt-in)
+#
+# 기본 docker-compose.yml은 backend 한 대가 API와 수집 스케줄러를 모두 담당한다.
+# 이 오버레이를 겹치면 역할이 분리되어 API 계층을 여러 대로 늘릴 수 있다.
+#
+#   backend   : API 전용 (스케줄러 OFF) — N대로 확장 가능, LB 뒤에 위치
+#   collector : 수집 전용 (스케줄러 ON) — 반드시 1대
+#   lb        : nginx 로드밸런서 — 8080을 대신 노출
+#
+# 사용법:
+#   docker compose -f docker-compose.yml -f docker-compose.scale.yml up -d --build --scale backend=2
+#
+# 확인:
+#   curl localhost:8080/actuator/health/readiness
+#   docker compose -f docker-compose.yml -f docker-compose.scale.yml logs lb | grep upstream=
+#
+# 왜 collector를 분리해야 하는가:
+#   수집 스케줄러가 여러 인스턴스에서 동시에 돌면 (1) 서울 열린데이터 API를 인스턴스
+#   수만큼 중복 호출해 일일 쿼터를 소진하고, (2) arrival_info를 전체 삭제 후 재삽입하는
+#   구조라 인스턴스끼리 서로가 방금 쓴 데이터를 지운다.
+
+# YAML 앵커는 파일 간에 공유되지 않으므로 이 파일에서 다시 정의한다.
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  backend:
+    # --scale로 늘리려면 고정 container_name과 고정 host 포트가 없어야 한다.
+    container_name: !reset null
+    ports: !reset []
+    environment:
+      - APP_SCHEDULER_ENABLED=false
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/actuator/health/readiness"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 60s
+
+  collector:
+    build:
+      context: ./backend
+    container_name: subway_collector
+    restart: unless-stopped
+    environment:
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_NAME=subway_monitoring
+      - DB_USER=subway
+      - DB_PASSWORD=subway123
+      - LOGSTASH_HOST=logstash:50000
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - ANOMALY_INDEX=subway-anomaly-results
+      - SUBWAY_API_KEY=${SUBWAY_API_KEY:-sample}
+      - SUBWAY_API_KEY_SECONDARY=${SUBWAY_API_KEY_SECONDARY:-sample}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      # 관리자 시딩은 API 쪽(backend)에서만 수행한다.
+      - ADMIN_EMAIL=
+      - ADMIN_PASSWORD=
+      # 이 프로세스만 수집/정리 스케줄러를 실행한다.
+      - APP_SCHEDULER_ENABLED=true
+      - TZ=Asia/Seoul
+    depends_on:
+      - mysql
+      - logstash
+    mem_limit: 768m
+    logging: *default-logging
+    networks:
+      - subway_network
+
+  lb:
+    image: nginx:1.27-alpine
+    container_name: subway_lb
+    restart: unless-stopped
+    volumes:
+      - ./lb/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      # 프론트엔드가 기대하는 주소를 그대로 유지하기 위해 LB가 8080을 넘겨받는다.
+      - "127.0.0.1:8080:80"
+    depends_on:
+      - backend
+    mem_limit: 128m
+    logging: *default-logging
+    networks:
+      - subway_network
