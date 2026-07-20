@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { ArrivalInfo } from '../types';
 import { useAuth } from '../context/AuthContext';
+import { API_BASE } from '../utils/api';
 
 export const useArrivals = (stationId?: string) => {
   const [arrivals, setArrivals] = useState<ArrivalInfo[]>([]);
@@ -18,8 +19,7 @@ export const useArrivals = (stationId?: string) => {
       setIsLoading(true);
         setError(null);
         try {
-          const apiUrl = (import.meta as any).env.VITE_API_URL || 'http://localhost:8080';
-        const response = await fetch(`${apiUrl}/api/v1/stations/${stationId}/arrivals`, {
+        const response = await fetch(`${API_BASE}/api/v1/stations/${stationId}/arrivals`, {
           headers: token ? { Authorization: `Bearer ${token}` } : undefined
         });
         if (!response.ok) {

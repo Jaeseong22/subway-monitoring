@@ -1,4 +1,5 @@
 import React, { useCallback, useContext, useState, createContext } from 'react';
+import { API_BASE } from '../utils/api';
 
 export interface AuthUser {
   id: number;
@@ -33,7 +34,6 @@ interface AuthResponse {
 const STORAGE_KEY = 'subway_auth';
 const AuthContext = createContext<AuthContextType | null>(null);
 
-const apiUrl = () => (import.meta as any).env.VITE_API_URL || 'http://localhost:8080';
 
 const loadInitialState = (): AuthState => {
   const stored = sessionStorage.getItem(STORAGE_KEY);
@@ -72,7 +72,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     async (path: string, payload: Record<string, string>): Promise<boolean> => {
       setError('');
       try {
-        const response = await fetch(`${apiUrl()}${path}`, {
+        const response = await fetch(`${API_BASE}${path}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)

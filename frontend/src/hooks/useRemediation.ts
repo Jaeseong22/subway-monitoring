@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { RemediationAction } from '../types';
 import { useAuth } from '../context/AuthContext';
+import { API_BASE } from '../utils/api';
 
 const POLL_INTERVAL_MS = 15000;
 
-const apiBase = () =>
-  (import.meta as any).env.VITE_API_URL || 'http://localhost:8080';
 
 /**
  * AI가 제안한 자동 대응 조치를 조회하고 승인/거부한다.
@@ -30,7 +29,7 @@ export const useRemediation = () => {
     }
     const seq = ++requestSeq.current;
     try {
-      const res = await fetch(`${apiBase()}/api/v1/admin/remediation`, {
+      const res = await fetch(`${API_BASE}/api/v1/admin/remediation`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (!res.ok) {
@@ -64,7 +63,7 @@ export const useRemediation = () => {
       setError(null);
       try {
         const res = await fetch(
-          `${apiBase()}/api/v1/admin/remediation/${actionId}/${decision}`,
+          `${API_BASE}/api/v1/admin/remediation/${actionId}/${decision}`,
           { method: 'POST', headers: { Authorization: `Bearer ${token}` } }
         );
         if (res.status === 409) {
