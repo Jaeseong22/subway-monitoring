@@ -3,15 +3,19 @@ import { Header } from '../components/Header';
 import { SummaryCard } from '../components/SummaryCard';
 import { InsightCard } from '../components/InsightCard';
 import { StatusBadge } from '../components/StatusBadge';
+import { RemediationCard } from '../components/RemediationCard';
 import { Anomaly } from '../types';
 import { useAdminData } from '../hooks/useAdminData';
+import { useRemediation } from '../hooks/useRemediation';
 import {
   ShieldAlert,
   Activity,
   AlertTriangle,
   CheckCircle2,
   ChevronRight,
-  Clock } from
+  Clock,
+  RefreshCw,
+  Wrench } from
 'lucide-react';
 import {
   LineChart,
@@ -34,7 +38,21 @@ const parseApiDate = (value: string) => {
 
 export const AdminPage: React.FC = () => {
   const { anomalies, insights, summary, isLoading } = useAdminData();
+  const {
+    actions,
+    isLoading: isActionsLoading,
+    error: actionsError,
+    pendingId,
+    approve,
+    reject,
+    refresh: refreshActions
+  } = useRemediation();
   const [selectedAnomaly, setSelectedAnomaly] = useState<Anomaly | null>(null);
+
+  const awaitingApproval = useMemo(
+    () => actions.filter((action) => action.status === 'PENDING' && !action.blocked).length,
+    [actions]
+  );
 
   useEffect(() => {
     if (!selectedAnomaly && anomalies.length > 0) {
@@ -132,6 +150,67 @@ export const AdminPage: React.FC = () => {
               <div className="text-sm text-gray-400">AI 인사이트가 없습니다.</div>
             )}
           </div>
+        </div>
+
+        {/* 자동 대응 */}
+        <div className="mb-8">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
+              <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                <Wrench size={18} className="text-blue-600" />
+                자동 대응
+              </h2>
+              {awaitingApproval > 0 &&
+              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border bg-amber-100 text-amber-700 border-amber-200">
+                  승인 대기 {awaitingApproval}건
+                </span>
+              }
+            </div>
+            <button
+              type="button"
+              onClick={refreshActions}
+              className="inline-flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 transition-colors">
+              <RefreshCw size={14} /> 새로고침
+            </button>
+          </div>
+
+          <p className="text-sm text-gray-500 mb-4">
+            AI가 제안한 조치입니다. 승인하면 실행 워커가 인스턴스 수를 조정하고, 이후 지표를
+            다시 확인해 개선되지 않으면 자동으로 롤백합니다.{' '}
+            <span className="text-gray-400">
+              승인 후 상태가 계속 &lsquo;실행 대기&rsquo;에 머무르면 실행 워커
+              (<code className="text-xs bg-gray-100 px-1 py-0.5 rounded">remediation_worker.py</code>)가
+              떠 있는지 확인하세요.
+            </span>
+          </p>
+
+          {actionsError &&
+          <div className="flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-100 rounded-lg p-3 mb-4">
+              <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+              <span>{actionsError}</span>
+            </div>
+          }
+
+          {actions.length > 0 ?
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {actions.map((action, idx) =>
+            <RemediationCard
+              key={action.id}
+              action={action}
+              index={idx}
+              isBusy={pendingId === action.id}
+              onApprove={approve}
+              onReject={reject} />
+            )}
+            </div> :
+
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 text-center">
+              <CheckCircle2 size={32} className="mx-auto mb-2 text-emerald-500 opacity-40" />
+              <p className="text-sm text-gray-500">
+                {isActionsLoading ? '조치를 불러오는 중입니다…' : '제안된 조치가 없습니다.'}
+              </p>
+            </div>
+          }
         </div>
 
         {/* Main Content: List + Detail */}
