@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Header } from '../components/Header';
 import { ArrivalGrid } from '../components/ArrivalGrid';
 import { ServiceNoticeBanner } from '../components/ServiceNoticeBanner';
-import { stations } from '../data/mockData';
+import { useStations } from '../hooks/useStations';
 import { ArrowLeft, Map, Info, Star } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { filterAndSortArrivals } from '../utils/arrival';
@@ -16,6 +16,7 @@ export const StationDetailPage: React.FC = () => {
     id: string;
   }>();
   const navigate = useNavigate();
+  const { stations, isLoading: isStationsLoading } = useStations();
   const station = stations.find((s) => s.id === id);
   const { arrivals: stationArrivals } = useArrivals(id);
   const { isAuthenticated } = useAuth();
@@ -24,6 +25,18 @@ export const StationDetailPage: React.FC = () => {
   useEffect(() => {
     window.scrollTo(0, 0);
   }, [id]);
+
+  // 역 정보를 아직 받아오는 중이라면 "찾을 수 없음"이 잠깐 스쳐 보이지 않게 한다.
+  if (!station && isStationsLoading) {
+    return (
+      <div className="min-h-screen flex flex-col bg-gray-50">
+        <Header />
+        <div className="flex-1 flex items-center justify-center">
+          <p className="text-gray-400">역 정보를 불러오는 중입니다…</p>
+        </div>
+      </div>);
+
+  }
 
   if (!station) {
     return (

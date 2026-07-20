@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, MapPin } from 'lucide-react';
-import { stations } from '../data/mockData';
 import { Station } from '../types';
+import { useStations } from '../hooks/useStations';
 import { motion, AnimatePresence } from 'framer-motion';
 export const SearchBar: React.FC = () => {
   const [query, setQuery] = useState('');
@@ -10,6 +10,7 @@ export const SearchBar: React.FC = () => {
   const [results, setResults] = useState<Station[]>([]);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
+  const { stations } = useStations();
   useEffect(() => {
     if (query.trim() === '') {
       setResults([]);
@@ -19,11 +20,11 @@ export const SearchBar: React.FC = () => {
     filter(
       (s) =>
       s.name.includes(query) ||
-      s.nameEn.toLowerCase().includes(query.toLowerCase())
+      (s.nameEn ?? '').toLowerCase().includes(query.toLowerCase())
     ).
     slice(0, 5);
     setResults(filtered);
-  }, [query]);
+  }, [query, stations]);
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (
