@@ -3,7 +3,9 @@ package com.monitoring.subway.domain.admin;
 import com.monitoring.subway.domain.admin.dto.AIInsightDto;
 import com.monitoring.subway.domain.admin.dto.AdminSummaryDto;
 import com.monitoring.subway.domain.admin.dto.AnomalyDto;
+import com.monitoring.subway.domain.admin.dto.DiagnosisDto;
 import com.monitoring.subway.domain.admin.dto.RemediationActionDto;
+import com.monitoring.subway.domain.admin.dto.VerificationDto;
 import com.monitoring.subway.domain.auth.AppUser;
 import com.monitoring.subway.domain.auth.AuthGuard;
 import lombok.RequiredArgsConstructor;
@@ -41,6 +43,22 @@ public class AdminController {
     public AdminSummaryDto getSummary(@RequestHeader(value = "Authorization", required = false) String authorization) {
         authGuard.requireAdmin(authorization);
         return adminService.getSummary();
+    }
+
+    /** 최신 분석의 근본 원인 진단(RCA 에이전트) 결과. */
+    @GetMapping("/diagnosis")
+    public DiagnosisDto getDiagnosis(
+        @RequestHeader(value = "Authorization", required = false) String authorization) {
+        authGuard.requireAdmin(authorization);
+        return adminService.getDiagnosis();
+    }
+
+    /** 최신 분석의 검증 패널(멀티 에이전트) 결과. */
+    @GetMapping("/verification")
+    public VerificationDto getVerification(
+        @RequestHeader(value = "Authorization", required = false) String authorization) {
+        authGuard.requireAdmin(authorization);
+        return adminService.getVerification();
     }
 
     /** AI가 제안한 자동 대응 조치 목록 (최신순). */

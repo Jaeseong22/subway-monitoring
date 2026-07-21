@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.node.MissingNode;
 import com.monitoring.subway.domain.admin.dto.AIInsightDto;
 import com.monitoring.subway.domain.admin.dto.AdminSummaryDto;
 import com.monitoring.subway.domain.admin.dto.AnomalyDto;
+import com.monitoring.subway.domain.admin.dto.DiagnosisDto;
+import com.monitoring.subway.domain.admin.dto.VerificationDto;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -145,6 +147,59 @@ public class AdminService {
         String latestAt = result.path("latest_anomaly").path("occurred_at").asText(source.path("@timestamp").asText(""));
         int todayCount = result.path("today_anomaly_count").asInt(anomalies.isArray() ? anomalies.size() : 0);
         return new AdminSummaryDto(systemStatus, todayCount, criticalCount, warningCount, latestTitle, latestAt);
+    }
+
+    /** 최신 분석의 근본 원인 진단(RCA 에이전트) 결과. 없으면 unavailable. */
+    public DiagnosisDto getDiagnosis() {
+        JsonNode source = fetchLatestSource();
+        JsonNode diagnosis = source.path("diagnosis");
+        if (source.isMissingNode() || !diagnosis.isObject()) {
+            return DiagnosisDto.unavailable();
+        }
+        List<DiagnosisDto.StepDto> steps = new ArrayList<>();
+        for (JsonNode step : diagnosis.path("investigation")) {
+            steps.add(new DiagnosisDto.StepDto(
+                step.path("step").asInt(0),
+                step.path("tool").asText(""),
+                step.path("observation").asText("")
+            ));
+        }
+        return new DiagnosisDto(
+            true,
+            diagnosis.path("status").asText("생략"),
+            diagnosis.path("root_cause").asText(""),
+            diagnosis.path("confidence").asText("low"),
+            toStringList(diagnosis.path("evidence")),
+            diagnosis.path("recommended_focus").asText(""),
+            diagnosis.path("steps_used").asInt(0),
+            steps
+        );
+    }
+
+    /** 최신 분석의 검증 패널(멀티 에이전트) 결과. 없으면 unavailable. */
+    public VerificationDto getVerification() {
+        JsonNode source = fetchLatestSource();
+        JsonNode verification = source.path("verification");
+        if (source.isMissingNode() || !verification.isObject()) {
+            return VerificationDto.unavailable();
+        }
+        List<VerificationDto.VoteDto> votes = new ArrayList<>();
+        for (JsonNode vote : verification.path("votes")) {
+            votes.add(new VerificationDto.VoteDto(
+                vote.path("lens").asText(""),
+                vote.path("name").asText(""),
+                vote.path("verdict").asText(""),
+                vote.path("reason").asText("")
+            ));
+        }
+        return new VerificationDto(
+            true,
+            verification.path("false_positive_votes").asInt(0),
+            votes.size(),
+            verification.path("downgrade").asBoolean(false),
+            verification.path("summary").asText(""),
+            votes
+        );
     }
 
     private JsonNode fetchLatestSource() {

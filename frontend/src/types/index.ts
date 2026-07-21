@@ -107,6 +107,43 @@ export interface RemediationAction {
   dryRun: boolean;
 }
 
+/** 근본 원인 진단 에이전트(RCA)의 조사 한 단계 */
+export interface DiagnosisStep {
+  step: number;
+  tool: string;
+  observation: string;
+}
+
+/** 근본 원인 진단 에이전트(RCA) 결과 */
+export interface Diagnosis {
+  available: boolean;
+  status: string; // 완료 | 미결 | 생략
+  rootCause: string;
+  confidence: string; // high | medium | low
+  evidence: string[];
+  recommendedFocus: string;
+  stepsUsed: number;
+  steps: DiagnosisStep[];
+}
+
+/** 검증 패널의 한 심사관 판정 */
+export interface VerificationVote {
+  lens: string;
+  name: string;
+  verdict: string; // real | false_positive | uncertain
+  reason: string;
+}
+
+/** 검증 패널(멀티 에이전트) 결과 */
+export interface Verification {
+  available: boolean;
+  falsePositiveVotes: number;
+  totalVotes: number;
+  downgraded: boolean;
+  summary: string;
+  votes: VerificationVote[];
+}
+
 export interface FavoriteStation {
   stationId: string;
   stationName: string;
