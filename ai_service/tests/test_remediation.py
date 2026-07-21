@@ -21,7 +21,7 @@ def cfg(**overrides):
         "enabled": True, "auto_approve": False, "service": "backend",
         "max_replicas": 4, "min_replicas": 1, "cooldown_minutes": 15,
         "verify_after_minutes": 10, "expire_after_minutes": 60,
-        "scale_in_after_normal_runs": 6,
+        "scale_in_after_normal_runs": 6, "cpu_warn": 60,
     }
     base.update(overrides)
     return base
@@ -216,6 +216,79 @@ class VerifyTest(unittest.TestCase):
         self.assertEqual(rollback["rollback_of"], "abc")
         # 롤백은 원상복구이므로 재승인을 요구하지 않는다.
         self.assertEqual(rollback["status"], remediation.APPROVED)
+
+
+class ReplanTest(unittest.TestCase):
+    """재계획: 확장 실패 후 진단 결과를 근거로 추가확장 vs 롤백을 결정한다."""
+
+    def failed_scale_out(self, to=2, keys=("saturation", "traffic")):
+        return {"action_id": "orig", "kind": remediation.SCALE_OUT,
+                "trigger": {"signal_keys": list(keys)},
+                "params": {"service": "backend", "from_replicas": to - 1, "to_replicas": to},
+                "guardrails": {}}
+
+    def persisting(self, keys=("saturation", "traffic")):
+        return {"detected_keys": list(keys), "overall_status": "위험",
+                "anomalies": [{"severity": "critical"}]}
+
+    def sat_metrics(self, cpu=88):
+        return {"traffic": {"peak_cpu_percent": cpu}}
+
+    def test_escalate_when_still_saturated_and_no_external_cause(self):
+        plan = remediation.replan(self.failed_scale_out(2), self.persisting(),
+                                  self.sat_metrics(88), diagnosis=None,
+                                  now_iso=NOW_ISO, cfg=cfg())
+        self.assertEqual(plan["decision"], "escalate")
+        self.assertEqual(plan["next"]["kind"], remediation.SCALE_OUT)
+        self.assertEqual(plan["next"]["params"]["to_replicas"], 3)
+        self.assertTrue(plan["next"]["is_escalation"])
+
+    def test_rollback_when_diagnosis_points_to_external_api(self):
+        # 진단이 '외부 API 타임아웃'을 지목하면 확장은 무의미 → 롤백
+        diag = {"status": "완료", "root_cause": "서울 외부 API가 08:15부터 상시 타임아웃"}
+        plan = remediation.replan(self.failed_scale_out(2), self.persisting(),
+                                  self.sat_metrics(88), diagnosis=diag,
+                                  now_iso=NOW_ISO, cfg=cfg())
+        self.assertEqual(plan["decision"], "rollback")
+        self.assertTrue(plan["next"].get("is_rollback"))
+        self.assertIn("타임아웃", plan["reason"])
+
+    def test_rollback_at_max_replicas(self):
+        # 이미 상한(4대)이면 더 확장 못 함 → 롤백
+        plan = remediation.replan(self.failed_scale_out(4), self.persisting(),
+                                  self.sat_metrics(90), diagnosis=None,
+                                  now_iso=NOW_ISO, cfg=cfg())
+        self.assertEqual(plan["decision"], "rollback")
+        self.assertIn("최대 인스턴스", plan["reason"])
+
+    def test_rollback_when_not_saturated(self):
+        # 신호는 남았지만 CPU 낮고 traffic/saturation 아님 → 확장 근거 약함 → 롤백
+        plan = remediation.replan(self.failed_scale_out(2, keys=("latency",)),
+                                  {"detected_keys": ["api_errors"], "overall_status": "위험",
+                                   "anomalies": [{"severity": "warning"}]},
+                                  self.sat_metrics(30), diagnosis=None,
+                                  now_iso=NOW_ISO, cfg=cfg())
+        self.assertEqual(plan["decision"], "rollback")
+
+    def test_escalation_action_is_pending_by_default(self):
+        plan = remediation.replan(self.failed_scale_out(2), self.persisting(),
+                                  self.sat_metrics(88), diagnosis=None,
+                                  now_iso=NOW_ISO, cfg=cfg())
+        self.assertEqual(plan["next"]["status"], remediation.PENDING)
+
+    def test_escalation_auto_approved_when_configured(self):
+        plan = remediation.replan(self.failed_scale_out(2), self.persisting(),
+                                  self.sat_metrics(88), diagnosis=None,
+                                  now_iso=NOW_ISO, cfg=cfg(auto_approve=True))
+        self.assertEqual(plan["next"]["status"], remediation.APPROVED)
+
+    def test_diagnosis_ignored_if_not_completed(self):
+        # 진단이 '생략/미결'이면 근거로 쓰지 않는다(외부원인 판단 안 함)
+        diag = {"status": "생략", "root_cause": "api timeout"}
+        plan = remediation.replan(self.failed_scale_out(2), self.persisting(),
+                                  self.sat_metrics(88), diagnosis=diag,
+                                  now_iso=NOW_ISO, cfg=cfg())
+        self.assertEqual(plan["decision"], "escalate")
 
 
 class LifecycleTest(unittest.TestCase):
