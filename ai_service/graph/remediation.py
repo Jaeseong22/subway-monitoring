@@ -59,6 +59,8 @@ def config() -> dict[str, Any]:
         "expire_after_minutes": _int("REMEDIATION_EXPIRE_AFTER_MINUTES", "60"),
         # 정상이 이만큼 연속되면 축소를 제안한다.
         "scale_in_after_normal_runs": _int("REMEDIATION_SCALE_IN_AFTER_NORMAL_RUNS", "6"),
+        # 재계획에서 '아직 포화'로 볼 CPU 기준(추가 확장 판단용). detection의 CPU_WARN과 맞춘다.
+        "cpu_warn": _int("CPU_WARN", "60"),
     }
 
 
@@ -251,6 +253,95 @@ def verify(action: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
     return {"status": FAILED, "rollback": True,
             "note": (f"확장 후에도 {', '.join(sorted(still_present))} 신호가 지속됩니다. "
                      "확장으로 해소되지 않는 원인(외부 API 지연, 슬로우 쿼리 등)일 수 있습니다.")}
+
+
+# 확장으로 해소되지 않는 근본 원인을 가리키는 진단 키워드.
+# 진단(RCA 에이전트)이 이런 원인을 지목하면 추가 확장 대신 롤백 후 사람에게 넘긴다.
+_NON_SCALABLE_HINTS = ("외부", "api", "타임아웃", "timeout", "쿼리", "query",
+                       "slow", "슬로우", "쿼터", "quota", "upstream", "종속", "db", "디비")
+
+
+def replan(failed_action: dict[str, Any], result: dict[str, Any],
+           metrics: dict[str, Any] | None, diagnosis: dict[str, Any] | None,
+           now_iso: str | None = None, cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+    """확장이 실패했을 때 다음 행동을 재계획한다.
+
+    단순 롤백만 하던 것을, 상황을 보고 **추가 확장 vs 롤백**으로 나눈다.
+    이때 근본 원인 진단(RCA 에이전트)의 결과를 근거로 쓴다 — 에이전트 간 협업.
+
+    안전을 위해 **행동 결정은 결정론적**이다. LLM에 인프라 결정을 맡기지 않는다.
+    반환: {"decision": "escalate|rollback", "reason": str, "next": <조치 dict>}
+
+    - escalate: 자원이 여전히 포화이고, 상한 미달이고, 진단이 '확장으로 해결 안 되는
+      원인'을 지목하지 않았을 때. 한 단계 더 확장을 제안한다(PENDING/자동승인 설정 따름).
+    - rollback: 그 외. 특히 진단이 외부 API/슬로우 쿼리 등을 지목하면 확장은 무의미하므로
+      되돌리고 원인 대응이 필요하다고 명시한다.
+    """
+    cfg = cfg or config()
+    now = _now(now_iso)
+    params = failed_action.get("params", {}) or {}
+    current = int(float(params.get("to_replicas") or 1))
+    traffic = (metrics or {}).get("traffic", {}) or {}
+    try:
+        cpu = float(traffic.get("peak_cpu_percent") or 0)
+    except (TypeError, ValueError):
+        cpu = 0.0
+
+    triggering = set(failed_action.get("trigger", {}).get("signal_keys") or [])
+    still_present = set(result.get("detected_keys") or []) & triggering
+
+    root_cause = ""
+    if diagnosis and diagnosis.get("status") == "완료":
+        root_cause = str(diagnosis.get("root_cause", "")).lower()
+    external_cause = any(hint in root_cause for hint in _NON_SCALABLE_HINTS)
+
+    saturated = cpu >= cfg["cpu_warn"] or bool(still_present & {"saturation", "traffic", "latency"})
+    can_escalate = (failed_action.get("kind") == SCALE_OUT
+                    and current < cfg["max_replicas"]
+                    and saturated
+                    and not external_cause)
+
+    if can_escalate:
+        target = current + 1
+        reason = (f"확장이 부족해 보입니다(포화 지속, 최대 CPU {cpu:.0f}%). "
+                  f"{current}대에서 {target}대로 추가 확장을 제안합니다.")
+        return {"decision": "escalate", "reason": reason,
+                "next": _escalate_action(failed_action, current, target, reason, now, cfg)}
+
+    if external_cause:
+        reason = (f"확장으로 해소되지 않는 원인으로 진단되었습니다: "
+                  f"{diagnosis.get('root_cause')}. 롤백 후 원인 대응(캐시/서킷브레이커/쿼리 점검)이 필요합니다.")
+    elif current >= cfg["max_replicas"]:
+        reason = (f"최대 인스턴스({cfg['max_replicas']}대)에서도 이상이 지속됩니다. "
+                  "롤백 후 용량 증설이나 근본 대응이 필요합니다.")
+    else:
+        reason = "확장 후에도 이상이 지속되어 롤백합니다."
+    return {"decision": "rollback", "reason": reason,
+            "next": rollback_of(failed_action, now_iso=now.isoformat(), cfg=cfg)}
+
+
+def _escalate_action(failed_action, from_replicas, to_replicas, reason, now, cfg) -> dict[str, Any]:
+    """추가 확장 조치를 만든다. 실제 확장이므로 승인 정책(auto_approve)을 따른다."""
+    status = APPROVED if cfg.get("auto_approve") else PENDING
+    params = failed_action.get("params", {}) or {}
+    return {
+        "created_at": now.isoformat(),
+        "status": status,
+        "kind": SCALE_OUT,
+        "blocked": False,
+        "is_escalation": True,
+        "escalation_of": failed_action.get("action_id"),
+        "reason": reason,
+        "trigger": failed_action.get("trigger", {}),
+        "params": {
+            "service": params.get("service", cfg["service"]),
+            "from_replicas": from_replicas,
+            "to_replicas": to_replicas,
+        },
+        "evidence": [],
+        "guardrails": failed_action.get("guardrails", {}),
+        "history": [{"at": now.isoformat(), "status": status, "note": reason}],
+    }
 
 
 def rollback_of(action: dict[str, Any], now_iso: str | None = None,

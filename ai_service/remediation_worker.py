@@ -79,7 +79,13 @@ def latest_result(client: ElasticsearchClient) -> dict:
         query={"match_all": {}},
     )
     hits = resp.get("hits", {}).get("hits", [])
-    return (hits[0].get("_source", {}) or {}).get("result", {}) if hits else {}
+    if not hits:
+        return {"result": {}, "metrics": {}, "diagnosis": None}
+    source = hits[0].get("_source", {}) or {}
+    # 재계획이 진단(RCA) 결과와 지표를 근거로 쓸 수 있도록 함께 반환한다.
+    return {"result": source.get("result", {}) or {},
+            "metrics": source.get("metrics", {}) or {},
+            "diagnosis": source.get("diagnosis")}
 
 
 def process_once(client: ElasticsearchClient, cfg: dict, dry_run: bool) -> int:
@@ -114,15 +120,19 @@ def process_once(client: ElasticsearchClient, cfg: dict, dry_run: bool) -> int:
             continue
 
         if status == remediation.EXECUTED and remediation.is_ready_to_verify(action, cfg=cfg):
-            verdict = remediation.verify(action, latest_result(client))
+            latest = latest_result(client)
+            verdict = remediation.verify(action, latest["result"])
             client.update_action(action_id, remediation.with_status(
                 action, verdict["status"], verdict["note"]))
             LOGGER.info("검증 id=%s → %s (%s)", action_id, verdict["status"], verdict["note"])
             if verdict["rollback"] and not action.get("is_rollback"):
-                # 롤백의 롤백은 만들지 않는다(무한 왕복 방지).
-                rollback = remediation.rollback_of(action, cfg=cfg)
-                rollback_id = client.save_action(rollback)
-                LOGGER.warning("롤백 조치 생성 id=%s (원본 %s)", rollback_id, action_id)
+                # 재계획: 단순 롤백 대신 진단 결과를 근거로 추가 확장 vs 롤백을 결정한다.
+                # 롤백 조치 자신은 재계획하지 않는다(무한 왕복 방지).
+                plan = remediation.replan(action, latest["result"], latest["metrics"],
+                                          latest["diagnosis"], cfg=cfg)
+                next_id = client.save_action(plan["next"])
+                LOGGER.warning("재계획 id=%s decision=%s → 새 조치 %s (원본 %s)",
+                               action_id, plan["decision"], next_id, action_id)
             handled += 1
 
     return handled
