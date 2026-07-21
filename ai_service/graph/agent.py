@@ -8,7 +8,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 
 from es_client import ElasticsearchClient
-from graph import detection, remediation
+from graph import detection, diagnosis as diagnosis_agent, remediation
 from graph.llm_merge import merge_llm_result
 from prompts.anomaly_prompt import build_anomaly_prompt
 
@@ -22,7 +22,9 @@ class GraphState(TypedDict, total=False):
     off_hours: bool
     recent_keys: list[list[str]]
     recent_actions: list[dict[str, Any]] | None
+    events: list[dict[str, Any]]          # 진단 에이전트가 파고들 원시 로그
     result: dict[str, Any]
+    diagnosis: dict[str, Any] | None      # 근본 원인 진단 산출물
     result_index: str
     proposed_action_id: str | None
 
@@ -83,6 +85,7 @@ def fetch_metrics(state: GraphState) -> GraphState:
             "baseline": {},
             "off_hours": off_hours,
             "recent_keys": [],
+            "events": [],
         }
 
     api_events = [e for e in events if e.get("event_type") == "API_COLLECTION"]
@@ -235,7 +238,8 @@ def fetch_metrics(state: GraphState) -> GraphState:
     }
 
     return {"metrics": metrics, "baseline": baseline, "off_hours": off_hours,
-            "recent_keys": recent_keys, "recent_actions": recent_actions}
+            "recent_keys": recent_keys, "recent_actions": recent_actions,
+            "events": events}
 
 
 def analyze_with_llm(state: GraphState) -> GraphState:
@@ -292,6 +296,48 @@ def _strip_code_fences(text: str) -> str:
     return t.strip()
 
 
+def diagnose(state: GraphState) -> GraphState:
+    """근본 원인 진단 에이전트. 확정된 이상에 대해서만 실행된다(조건부 라우팅).
+
+    LLM이 로그를 도구로 파고들어 '왜' 이상이 생겼는지 조사한다. 판정은 건드리지 않고
+    서술적 진단만 덧붙인다. rules 모드거나 LLM이 없으면 조용히 생략한다.
+    """
+    if os.getenv("ANALYSIS_MODE", "llm").lower() == "rules":
+        return {"diagnosis": None}
+    if not os.getenv("OPENAI_API_KEY"):
+        return {"diagnosis": None}
+
+    result = state.get("result", {}) or {}
+    events = state.get("events", []) or []
+    max_steps = int(os.getenv("DIAGNOSIS_MAX_STEPS", "6"))
+    try:
+        caller = diagnosis_agent.make_openai_caller()
+    except Exception as exc:
+        LOGGER.warning("진단 에이전트 초기화 실패 — 진단을 생략합니다: %s", exc)
+        return {"diagnosis": None}
+
+    verdict = diagnosis_agent.run(result, state.get("metrics", {}) or {}, events,
+                                  caller, max_steps=max_steps)
+    LOGGER.info("진단 완료 status=%s confidence=%s steps=%s",
+                verdict.get("status"), verdict.get("confidence"), verdict.get("steps_used"))
+    return {"diagnosis": verdict}
+
+
+def route_after_analyze(state: GraphState) -> str:
+    """분석 결과에 따라 그래프를 분기한다.
+
+    - 정상이거나 rules 모드/키 없음 → 진단을 건너뛰고 바로 저장(LLM 비용 0).
+    - 이상 확정 → 진단 에이전트로 보낸다.
+    이것이 그래프에 실제 조건부 분기를 만드는 지점이다(기존엔 무조건 직선이었다).
+    """
+    result = state.get("result", {}) or {}
+    has_anomaly = result.get("today_anomaly_count", 0) > 0
+    rules_mode = os.getenv("ANALYSIS_MODE", "llm").lower() == "rules"
+    if has_anomaly and not rules_mode and os.getenv("OPENAI_API_KEY"):
+        return "diagnose"
+    return "store"
+
+
 def store_result(state: GraphState) -> GraphState:
     result = state.get("result", {})
     generated_at = datetime.now(timezone.utc).isoformat()
@@ -303,6 +349,7 @@ def store_result(state: GraphState) -> GraphState:
         "metrics": state.get("metrics", {}),
         "baseline": state.get("baseline", {}),
         "result": result,
+        "diagnosis": state.get("diagnosis"),
     }
     try:
         client = ElasticsearchClient()
@@ -374,12 +421,16 @@ def build_graph():
     graph = StateGraph(GraphState)
     graph.add_node("fetch_metrics", fetch_metrics)
     graph.add_node("analyze", analyze_with_llm)
+    graph.add_node("diagnose", diagnose)
     graph.add_node("store", store_result)
     graph.add_node("remediate", propose_remediation)
 
     graph.set_entry_point("fetch_metrics")
     graph.add_edge("fetch_metrics", "analyze")
-    graph.add_edge("analyze", "store")
+    # 조건부 분기: 이상이 확정됐을 때만 진단 에이전트를 태운다(정상이면 비용 0).
+    graph.add_conditional_edges("analyze", route_after_analyze,
+                                {"diagnose": "diagnose", "store": "store"})
+    graph.add_edge("diagnose", "store")
     graph.add_edge("store", "remediate")
     graph.add_edge("remediate", END)
 

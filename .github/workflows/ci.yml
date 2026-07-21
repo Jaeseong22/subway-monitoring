@@ -80,6 +80,7 @@ jobs:
         run: |
           python tests/test_detection.py
           python tests/test_remediation.py
+          python tests/test_diagnosis.py
 
       - name: Import check (with dependencies)
         working-directory: ai_service
