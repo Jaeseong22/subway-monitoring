@@ -4,6 +4,7 @@ import { SummaryCard } from '../components/SummaryCard';
 import { InsightCard } from '../components/InsightCard';
 import { StatusBadge } from '../components/StatusBadge';
 import { RemediationCard } from '../components/RemediationCard';
+import { DiagnosisPanel } from '../components/DiagnosisPanel';
 import { Anomaly } from '../types';
 import { useAdminData } from '../hooks/useAdminData';
 import { useRemediation } from '../hooks/useRemediation';
@@ -37,7 +38,7 @@ const parseApiDate = (value: string) => {
 };
 
 export const AdminPage: React.FC = () => {
-  const { anomalies, insights, summary, isLoading } = useAdminData();
+  const { anomalies, insights, summary, diagnosis, verification, isLoading } = useAdminData();
   const {
     actions,
     isLoading: isActionsLoading,
@@ -150,6 +151,12 @@ export const AdminPage: React.FC = () => {
               <div className="text-sm text-gray-400">AI 인사이트가 없습니다.</div>
             )}
           </div>
+        </div>
+
+        {/* AI 근본 원인 분석 + 검증 패널 */}
+        <div className="mb-8">
+          <h2 className="text-lg font-bold text-gray-900 mb-4">AI 에이전트 분석</h2>
+          <DiagnosisPanel diagnosis={diagnosis} verification={verification} />
         </div>
 
         {/* 자동 대응 */}
