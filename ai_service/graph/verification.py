@@ -54,8 +54,25 @@ LENSES = (
     },
 )
 
+# 심사관이 오탐이라 부를 수 있는 근거를 명확히 제한한다. 평가(evals)에서 심사관들이
+# (1) 단일 인스턴스라는 이유로, (2) 충분한 baseline(40건)을 "적다"고 오판해 진짜 이상을
+# 강등하는 false negative가 드러나, 아래 가드를 추가했다.
+_GUARDRAILS = (
+    "\n\nWhat does NOT make an alert a false positive:\n"
+    "- The number of running instances. A single instance is normal — NEVER cite "
+    "instance count as a reason to distrust an alert.\n"
+    "- A baseline of 30+ samples. That is sufficient; only distrust the baseline when it "
+    "has FEWER THAN 5 samples.\n"
+    "- A large, sustained deviation. If a metric is 3x+ over a well-sampled baseline and "
+    "persists for several minutes, it is a real problem regardless of instance count.\n"
+    "Only call it a false positive with a concrete signal of noise: a very small baseline "
+    "(<5 samples), a single-bucket momentary spike, a tiny denominator (e.g. 1 of 2 requests), "
+    "or an explicit restart/deploy/scale-out warmup in the evidence."
+)
+
 _INSTRUCTION = (
-    "\n\nRespond with JSON only (no markdown):\n"
+    _GUARDRAILS
+    + "\n\nRespond with JSON only (no markdown):\n"
     '{"verdict": "real|false_positive|uncertain", "reason": "한국어 한 문장"}\n'
     "Default to 'uncertain' if you cannot tell. Only say 'false_positive' when you have "
     "a concrete reason to distrust the alert."
