@@ -164,6 +164,22 @@ class ElasticsearchClient:
     def save_anomaly_result(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.client.index(index=self.anomaly_index, document=payload)
 
+    def fetch_latest_analysis(self) -> dict[str, Any]:
+        """가장 최근 분석 문서의 result/metrics/diagnosis를 반환한다(재계획·검증용)."""
+        resp = self.client.search(
+            index=self.anomaly_index,
+            size=1,
+            sort=[{"@timestamp": {"order": "desc"}}],
+            query={"match_all": {}},
+        )
+        hits = resp.get("hits", {}).get("hits", [])
+        if not hits:
+            return {"result": {}, "metrics": {}, "diagnosis": None}
+        source = hits[0].get("_source", {}) or {}
+        return {"result": source.get("result", {}) or {},
+                "metrics": source.get("metrics", {}) or {},
+                "diagnosis": source.get("diagnosis")}
+
     # ---------------------------------------------------------------- 자동 대응
     def fetch_recent_actions(self, size: int = 20) -> list[dict[str, Any]]:
         """최근 자동 대응 조치를 최신순으로 조회한다(쿨다운·중복 제안 판정에 사용)."""
