@@ -7,7 +7,6 @@ import com.monitoring.subway.domain.auth.dto.AuthDtos.RegisterRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
-import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -50,20 +49,7 @@ public class AuthController {
         return authorization.substring("Bearer ".length()).trim();
     }
 
-    // 잘못된 입력(형식 오류 등)은 400으로 응답한다.
-    @ExceptionHandler(IllegalArgumentException.class)
-    @ResponseStatus(HttpStatus.BAD_REQUEST)
-    public ErrorResponse handleBadRequest(RuntimeException exception) {
-        return new ErrorResponse(exception.getMessage());
-    }
-
-    // 서버 설정 문제(예: Google client-id 미설정)는 503으로 응답한다.
-    @ExceptionHandler(IllegalStateException.class)
-    @ResponseStatus(HttpStatus.SERVICE_UNAVAILABLE)
-    public ErrorResponse handleServiceUnavailable(RuntimeException exception) {
-        return new ErrorResponse(exception.getMessage());
-    }
-
-    public record ErrorResponse(String message) {}
+    // 예외 처리는 GlobalExceptionHandler로 통일한다(IllegalArgumentException→400,
+    // IllegalStateException→503 등). 여기 로컬 핸들러를 두지 않는다.
 }
 
