@@ -26,9 +26,9 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from dotenv import load_dotenv  # noqa: E402
-
-from es_client import ElasticsearchClient  # noqa: E402
+# 서드파티 의존성(dotenv/elasticsearch)은 main()에서만 필요하다. 모듈 레벨에 두면
+# process_once 같은 순수 로직을 테스트할 때도 의존성 설치를 강제하게 되므로,
+# main()에서 지연 import한다. remediation은 의존성이 없어 여기서 import해도 된다.
 from graph import remediation  # noqa: E402
 
 LOGGER = logging.getLogger("remediation-worker")
@@ -70,12 +70,12 @@ def execute(action: dict, dry_run: bool) -> tuple[bool, str]:
     return True, f"실행 완료: {printable}"
 
 
-def latest_result(client: ElasticsearchClient) -> dict:
+def latest_result(client: "ElasticsearchClient") -> dict:
     """검증·재계획에 사용할 가장 최근 분석 결과(result/metrics/diagnosis)."""
     return client.fetch_latest_analysis()
 
 
-def process_once(client: ElasticsearchClient, cfg: dict, dry_run: bool) -> int:
+def process_once(client: "ElasticsearchClient", cfg: dict, dry_run: bool) -> int:
     """열려 있는 조치들을 한 번 훑는다. 처리한 건수를 반환한다."""
     handled = 0
     for action in client.fetch_recent_actions(size=50):
@@ -147,6 +147,9 @@ def process_once(client: ElasticsearchClient, cfg: dict, dry_run: bool) -> int:
 
 
 def main() -> None:
+    from dotenv import load_dotenv
+    from es_client import ElasticsearchClient
+
     load_dotenv()
     logging.basicConfig(
         level=os.getenv("LOG_LEVEL", "INFO").upper(),
