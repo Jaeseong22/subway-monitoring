@@ -57,6 +57,9 @@ def config() -> dict[str, Any]:
         "cooldown_minutes": _int("REMEDIATION_COOLDOWN_MINUTES", "15"),
         "verify_after_minutes": _int("REMEDIATION_VERIFY_AFTER_MINUTES", "10"),
         "expire_after_minutes": _int("REMEDIATION_EXPIRE_AFTER_MINUTES", "60"),
+        # 실행이 이 시간 내에 EXECUTED로 넘어가지 않으면 워커 중단으로 보고 정리한다.
+        # (execute의 subprocess timeout은 300초이므로 정상이면 훨씬 빨리 넘어간다.)
+        "execute_timeout_minutes": _int("REMEDIATION_EXECUTE_TIMEOUT_MINUTES", "15"),
         # 정상이 이만큼 연속되면 축소를 제안한다.
         "scale_in_after_normal_runs": _int("REMEDIATION_SCALE_IN_AFTER_NORMAL_RUNS", "6"),
         # 재계획에서 '아직 포화'로 볼 CPU 기준(추가 확장 판단용). detection의 CPU_WARN과 맞춘다.
@@ -382,6 +385,50 @@ def expire_stale(action: dict[str, Any], now_iso: str | None = None,
     if not created:
         return False
     return _now(now_iso) >= created + timedelta(minutes=cfg["expire_after_minutes"])
+
+
+def _last_transition_at(action: dict[str, Any]) -> datetime | None:
+    """가장 최근 상태 전이 시각. history가 없으면 created_at."""
+    history = action.get("history") or []
+    if history:
+        return _parse(history[-1].get("at"))
+    return _parse(action.get("created_at"))
+
+
+def reap_stuck(action: dict[str, Any], now_iso: str | None = None,
+               cfg: dict[str, Any] | None = None) -> tuple[str, str] | None:
+    """워커가 중간에 죽어 멈춘 조치를 종료 상태로 되돌린다.
+
+    이게 없으면 워커가 EXECUTING/EXECUTED에서 한 번만 죽어도 그 조치가 OPEN_STATUSES에
+    영원히 남고, has_open_action이 이후 **모든** 제안을 영구 차단한다(자동 대응 전체가
+    조용히 죽는 단일 장애점). expire_stale은 PENDING만 만료시키므로 여기서 실행 단계의
+    stuck을 처리한다.
+
+    반환: (새 상태, 사유) 또는 None(아직 정상 범위).
+
+    - EXECUTING이 execute_timeout을 넘으면 → FAILED. 실제로 확장이 됐는지 불확실하므로
+      롤백을 자동 생성하지 않고(위험) 사람이 실제 인스턴스 수를 확인하도록 안내한다.
+    - EXECUTED가 expire_after를 넘도록 검증되지 않으면 → FAILED(검증 불가 상태).
+    """
+    cfg = cfg or config()
+    now = _now(now_iso)
+    status = action.get("status")
+
+    if status == EXECUTING:
+        entered = _last_transition_at(action)
+        if entered and now >= entered + timedelta(minutes=cfg["execute_timeout_minutes"]):
+            return (FAILED, f"실행이 {int(cfg['execute_timeout_minutes'])}분 내에 완료되지 "
+                            "않았습니다. 워커 중단이 의심됩니다. 실제 인스턴스 수를 확인하세요.")
+        return None
+
+    if status == EXECUTED:
+        executed = _parse(action.get("executed_at")) or _last_transition_at(action)
+        if executed and now >= executed + timedelta(minutes=cfg["expire_after_minutes"]):
+            return (FAILED, f"실행 후 {int(cfg['expire_after_minutes'])}분이 지나도 검증되지 "
+                            "않았습니다. 워커 중단이 의심됩니다.")
+        return None
+
+    return None
 
 
 def with_status(action: dict[str, Any], status: str, note: str = "",

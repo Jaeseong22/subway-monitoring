@@ -71,21 +71,8 @@ def execute(action: dict, dry_run: bool) -> tuple[bool, str]:
 
 
 def latest_result(client: ElasticsearchClient) -> dict:
-    """검증에 사용할 가장 최근 분석 결과."""
-    resp = client.client.search(
-        index=client.anomaly_index,
-        size=1,
-        sort=[{"@timestamp": {"order": "desc"}}],
-        query={"match_all": {}},
-    )
-    hits = resp.get("hits", {}).get("hits", [])
-    if not hits:
-        return {"result": {}, "metrics": {}, "diagnosis": None}
-    source = hits[0].get("_source", {}) or {}
-    # 재계획이 진단(RCA) 결과와 지표를 근거로 쓸 수 있도록 함께 반환한다.
-    return {"result": source.get("result", {}) or {},
-            "metrics": source.get("metrics", {}) or {},
-            "diagnosis": source.get("diagnosis")}
+    """검증·재계획에 사용할 가장 최근 분석 결과(result/metrics/diagnosis)."""
+    return client.fetch_latest_analysis()
 
 
 def process_once(client: ElasticsearchClient, cfg: dict, dry_run: bool) -> int:
@@ -119,7 +106,28 @@ def process_once(client: ElasticsearchClient, cfg: dict, dry_run: bool) -> int:
             handled += 1
             continue
 
-        if status == remediation.EXECUTED and remediation.is_ready_to_verify(action, cfg=cfg):
+        if status == remediation.EXECUTING:
+            # 워커가 실행 중 죽으면 이 조치가 EXECUTING에 영원히 남아 이후 모든 제안을
+            # 차단한다. 타임아웃을 넘으면 정리한다.
+            reaped = remediation.reap_stuck(action, cfg=cfg)
+            if reaped:
+                new_status, note = reaped
+                client.update_action(action_id, remediation.with_status(action, new_status, note))
+                LOGGER.warning("멈춘 조치 정리 id=%s → %s (%s)", action_id, new_status, note)
+                handled += 1
+            continue
+
+        if status == remediation.EXECUTED:
+            # 검증 전에 워커가 죽어 오래 방치된 EXECUTED도 정리한다.
+            reaped = remediation.reap_stuck(action, cfg=cfg)
+            if reaped:
+                new_status, note = reaped
+                client.update_action(action_id, remediation.with_status(action, new_status, note))
+                LOGGER.warning("멈춘 조치 정리 id=%s → %s (%s)", action_id, new_status, note)
+                handled += 1
+                continue
+            if not remediation.is_ready_to_verify(action, cfg=cfg):
+                continue
             latest = latest_result(client)
             verdict = remediation.verify(action, latest["result"])
             client.update_action(action_id, remediation.with_status(

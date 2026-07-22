@@ -21,7 +21,7 @@ def cfg(**overrides):
         "enabled": True, "auto_approve": False, "service": "backend",
         "max_replicas": 4, "min_replicas": 1, "cooldown_minutes": 15,
         "verify_after_minutes": 10, "expire_after_minutes": 60,
-        "scale_in_after_normal_runs": 6, "cpu_warn": 60,
+        "scale_in_after_normal_runs": 6, "cpu_warn": 60, "execute_timeout_minutes": 15,
     }
     base.update(overrides)
     return base
@@ -305,6 +305,52 @@ class LifecycleTest(unittest.TestCase):
         approved = {"status": remediation.APPROVED,
                     "created_at": (NOW - timedelta(hours=5)).isoformat()}
         self.assertFalse(remediation.expire_stale(approved, now_iso=NOW_ISO, cfg=cfg()))
+
+
+class ReapStuckTest(unittest.TestCase):
+    """워커가 실행 중 죽어 멈춘 조치를 정리한다(파이프라인 영구 정지 방지)."""
+
+    def executing(self, minutes_ago):
+        entered = (NOW - timedelta(minutes=minutes_ago)).isoformat()
+        return {"status": remediation.EXECUTING,
+                "history": [{"at": entered, "status": remediation.EXECUTING, "note": "실행 시작"}]}
+
+    def executed(self, minutes_ago):
+        ex = (NOW - timedelta(minutes=minutes_ago)).isoformat()
+        return {"status": remediation.EXECUTED, "executed_at": ex,
+                "history": [{"at": ex, "status": remediation.EXECUTED, "note": "실행 완료"}]}
+
+    def test_executing_stuck_becomes_failed(self):
+        reaped = remediation.reap_stuck(self.executing(20), now_iso=NOW_ISO, cfg=cfg())
+        self.assertIsNotNone(reaped)
+        self.assertEqual(reaped[0], remediation.FAILED)
+        self.assertIn("워커 중단", reaped[1])
+
+    def test_executing_recent_not_reaped(self):
+        # execute_timeout(15분) 이내면 아직 실행 중일 수 있으므로 건드리지 않는다.
+        self.assertIsNone(remediation.reap_stuck(self.executing(5), now_iso=NOW_ISO, cfg=cfg()))
+
+    def test_executed_long_unverified_becomes_failed(self):
+        # expire_after(60분) 넘도록 검증 안 됨 → 워커 중단 의심
+        reaped = remediation.reap_stuck(self.executed(90), now_iso=NOW_ISO, cfg=cfg())
+        self.assertEqual(reaped[0], remediation.FAILED)
+
+    def test_executed_within_window_not_reaped(self):
+        self.assertIsNone(remediation.reap_stuck(self.executed(20), now_iso=NOW_ISO, cfg=cfg()))
+
+    def test_other_statuses_not_reaped(self):
+        for status in (remediation.PENDING, remediation.APPROVED, remediation.SUCCEEDED,
+                       remediation.FAILED, remediation.ROLLED_BACK):
+            action = {"status": status, "created_at": (NOW - timedelta(hours=5)).isoformat()}
+            self.assertIsNone(remediation.reap_stuck(action, now_iso=NOW_ISO, cfg=cfg()))
+
+    def test_reaped_action_no_longer_blocks_proposals(self):
+        """핵심: stuck 조치를 정리하면 has_open_action이 풀려 새 제안이 가능해진다."""
+        stuck = {"action_id": "s", **self.executing(20)}
+        self.assertTrue(remediation.has_open_action([stuck]))  # 정리 전엔 차단
+        reaped = remediation.reap_stuck(stuck, now_iso=NOW_ISO, cfg=cfg())
+        resolved = remediation.with_status(stuck, reaped[0], reaped[1], now_iso=NOW_ISO)
+        self.assertFalse(remediation.has_open_action([resolved]))  # 정리 후 해제
 
     def test_with_status_appends_history_without_mutating(self):
         action = remediation.propose(anomalous(), metrics(1), [], now_iso=NOW_ISO, cfg=cfg())
