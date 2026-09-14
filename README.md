@@ -498,6 +498,32 @@ scripts/run_favorite_alert_demo.sh watch
 scripts/run_favorite_alert_demo.sh cleanup
 ```
 
+## 트래픽 시뮬레이터
+
+실제 사용자가 없는 환경(로컬 개발, 발표 전 준비 기간)에서는 traffic/latency/saturation
+신호에 데이터가 쌓이지 않아 AI 이상탐지의 28일 baseline이 만들어지지 않습니다.
+`run_anomaly_demo.sh`처럼 ES에 로그 문서를 직접 꽂는 대신, 실제 backend 엔드포인트를
+호출해 `RequestTrafficMetrics`/`GoldenSignalsLogger`가 진짜로 집계한 값을 쌓습니다.
+
+```bash
+scripts/traffic_simulator.sh
+```
+
+- 로그인 없이 되는 역 목록/검색/도착정보 엔드포인트와, 테스트 계정(`SIM_EMAIL`)으로
+  로그인해 즐겨찾기/개인화 알림 엔드포인트까지 시간대별 강도로 호출합니다.
+- 출퇴근 피크(7-9시, 18-20시)에 요청이 몰리고 심야엔 줄어드는 굴곡을 흉내냅니다.
+- 평균 `SPIKE_MEAN_INTERVAL_HOURS`(기본 8시간)마다 한 번씩 5~12분간 트래픽을
+  10배로 급증시키는 "이상 주입"을 스스로 섞어, 이상탐지가 실제로 발동하는지도
+  로그로 확인할 수 있습니다.
+
+며칠 동안 백그라운드로 켜두려면:
+
+```bash
+nohup scripts/traffic_simulator.sh > logs/traffic_simulator.log 2>&1 &
+```
+
+중지는 `pkill -f traffic_simulator.sh`. 주요 환경변수는 스크립트 상단 주석을 참고하세요.
+
 ## Elasticsearch 백업
 
 Elasticsearch 로그와 이상탐지 결과를 스냅샷으로 백업할 수 있습니다.
