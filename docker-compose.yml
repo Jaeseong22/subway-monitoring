@@ -39,6 +39,12 @@ services:
       - xpack.security.enabled=false
       - ES_JAVA_OPTS=-Xms1g -Xmx1g
       - path.repo=/usr/share/elasticsearch/snapshots
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s' >/dev/null"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 40s
     ports:
       - "127.0.0.1:9200:9200"
     volumes:
@@ -170,7 +176,10 @@ services:
       - ANOMALY_CONSECUTIVE_N=${ANOMALY_CONSECUTIVE_N:-2}
       - TZ=Asia/Seoul
     depends_on:
-      - elasticsearch
+      # RUN_ON_STARTUP=true면 기동 직후 바로 분석하므로 ES가 응답할 때까지 기다린다.
+      # service_started만으로는 첫 분석이 Connection refused로 실패한다.
+      elasticsearch:
+        condition: service_healthy
     mem_limit: 512m
     logging: *default-logging
     networks:
