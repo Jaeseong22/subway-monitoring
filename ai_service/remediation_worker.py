@@ -13,7 +13,8 @@
 
 루프:
     APPROVED  → 명령 실행 → EXECUTED
-    EXECUTED  → 검증 대기 시간 경과 후 최신 분석 결과로 판정 → SUCCEEDED | FAILED(+롤백 생성)
+    EXECUTED  → 검증 대기 시간 경과 후, 실행 이후에 생성된 분석 결과로 판정
+                (없으면 분석을 한 번 강제 실행) → SUCCEEDED | FAILED(+롤백 생성)
     PENDING   → 만료 시간 경과 시 EXPIRED
 """
 from __future__ import annotations
@@ -71,8 +72,32 @@ def execute(action: dict, dry_run: bool) -> tuple[bool, str]:
 
 
 def latest_result(client: "ElasticsearchClient") -> dict:
-    """검증·재계획에 사용할 가장 최근 분석 결과(result/metrics/diagnosis)."""
+    """검증·재계획에 사용할 가장 최근 분석 결과(result/metrics/diagnosis/generated_at)."""
     return client.fetch_latest_analysis()
+
+
+def refresh_analysis() -> bool:
+    """분석 컨테이너 안에서 이상탐지를 한 번 즉시 실행한다.
+
+    하루 2회 고정 시각 모드에서는 검증 시점(실행 10분 후)에 새 분석 결과가 없다.
+    촉발 결과로 검증하면 항상 롤백되므로, 검증 직전에 분석을 강제로 한 번 돌린다.
+    scripts/run_ai_once_docker.sh 와 같은 명령이다.
+    """
+    container = os.getenv("REMEDIATION_AI_CONTAINER", "subway_ai_model")
+    cmd = ["docker", "exec", container, "python", "-c",
+           "from main import run_once; run_once()"]
+    LOGGER.info("검증용 분석 실행: %s", " ".join(cmd))
+    try:
+        completed = subprocess.run(cmd, capture_output=True, text=True, timeout=600,
+                                   check=False, cwd=REPO_ROOT)
+    except (OSError, subprocess.SubprocessError) as exc:
+        LOGGER.error("검증용 분석 실행 실패: %s", exc)
+        return False
+    if completed.returncode != 0:
+        tail = (completed.stderr or completed.stdout or "").strip()[-500:]
+        LOGGER.error("검증용 분석이 코드 %s로 실패: %s", completed.returncode, tail)
+        return False
+    return True
 
 
 def process_once(client: "ElasticsearchClient", cfg: dict, dry_run: bool) -> int:
@@ -129,6 +154,14 @@ def process_once(client: "ElasticsearchClient", cfg: dict, dry_run: bool) -> int
             if not remediation.is_ready_to_verify(action, cfg=cfg):
                 continue
             latest = latest_result(client)
+            # dry-run은 실제로 실행한 게 없으므로 최신 결과로 계획만 판정한다.
+            if not dry_run and not remediation.analysis_is_post_execution(action, latest):
+                if not refresh_analysis():
+                    continue  # 다음 주기에 다시 시도. 계속 실패하면 reap_stuck이 정리한다.
+                latest = latest_result(client)
+                if not remediation.analysis_is_post_execution(action, latest):
+                    LOGGER.warning("검증 보류 id=%s — 실행 이후의 분석 결과가 아직 없습니다.", action_id)
+                    continue
             verdict = remediation.verify(action, latest["result"])
             client.update_action(action_id, remediation.with_status(
                 action, verdict["status"], verdict["note"]))

@@ -318,7 +318,12 @@ AI 서비스는 Elasticsearch의 `subway-logs-*` 인덱스에서 최근 로그�
 
 #### 실행 주기
 
-기본은 **5분 간격 상시 관측**(`RUN_INTERVAL_MINUTES=5`)이다. `RUN_TIMES`를 지정하면 고정 시각 모드로 동작하지만, 그 시각 외에는 관측 공백이 생기므로 운영 목적에는 권장하지 않는다.
+기본은 **5분 간격 상시 관측**(`RUN_INTERVAL_MINUTES=5`)이다. `RUN_TIMES`를 지정하면 고정 시각 모드로 동작하며 그 시각 외에는 관측 공백이 생긴다.
+
+다만 `ANALYSIS_MODE=llm`이면 **정상이어도 매 실행마다 OpenAI를 한 번 호출**한다(요약 문장 생성). 5분 주기는 하루 288회 호출이므로, 비용을 제한해야 하면 `RUN_TIMES=08:00,18:00`처럼 고정 시각 모드를 쓴다. 이 모드에서는 다음 두 가지가 자동으로 달라진다.
+
+- **디바운스가 꺼진다.** 연속 N회 조건은 "직전 실행"과 비교하는데 직전 실행이 10시간 전이라 10분짜리 급증은 영원히 확정되지 않는다. 고정 시각 모드에서는 `ANOMALY_CONSECUTIVE_N`을 1로 두고 검증 패널이 오탐을 거른다.
+- **자동 대응 검증이 분석을 강제 실행한다.** 워커는 조치 실행 이후에 생성된 분석 결과로만 검증한다. 검증 시점에 새 결과가 없으면 `docker exec <REMEDIATION_AI_CONTAINER>`로 분석을 한 번 돌린 뒤 판정한다. 촉발 결과로 검증하면 촉발 신호가 당연히 남아 있어 매번 롤백되기 때문이다.
 
 #### LLM의 역할과 한계
 
@@ -497,6 +502,32 @@ scripts/run_favorite_alert_demo.sh watch
 ```bash
 scripts/run_favorite_alert_demo.sh cleanup
 ```
+
+## 트래픽 시뮬레이터
+
+실제 사용자가 없는 환경(로컬 개발, 발표 전 준비 기간)에서는 traffic/latency/saturation
+신호에 데이터가 쌓이지 않아 AI 이상탐지의 28일 baseline이 만들어지지 않습니다.
+`run_anomaly_demo.sh`처럼 ES에 로그 문서를 직접 꽂는 대신, 실제 backend 엔드포인트를
+호출해 `RequestTrafficMetrics`/`GoldenSignalsLogger`가 진짜로 집계한 값을 쌓습니다.
+
+```bash
+scripts/traffic_simulator.sh
+```
+
+- 로그인 없이 되는 역 목록/검색/도착정보 엔드포인트와, 테스트 계정(`SIM_EMAIL`)으로
+  로그인해 즐겨찾기/개인화 알림 엔드포인트까지 시간대별 강도로 호출합니다.
+- 출퇴근 피크(7-9시, 18-20시)에 요청이 몰리고 심야엔 줄어드는 굴곡을 흉내냅니다.
+- 평균 `SPIKE_MEAN_INTERVAL_HOURS`(기본 8시간)마다 한 번씩 5~12분간 트래픽을
+  10배로 급증시키는 "이상 주입"을 스스로 섞어, 이상탐지가 실제로 발동하는지도
+  로그로 확인할 수 있습니다.
+
+며칠 동안 백그라운드로 켜두려면:
+
+```bash
+nohup scripts/traffic_simulator.sh > logs/traffic_simulator.log 2>&1 &
+```
+
+중지는 `pkill -f traffic_simulator.sh`. 주요 환경변수는 스크립트 상단 주석을 참고하세요.
 
 ## Elasticsearch 백업
 

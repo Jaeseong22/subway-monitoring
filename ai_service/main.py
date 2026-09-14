@@ -24,8 +24,21 @@ def parse_run_times(value: str) -> list[tuple[int, int]]:
     return times
 
 
+def apply_schedule_mode_defaults() -> None:
+    """고정 시각 모드(RUN_TIMES)에서는 연속 N회 디바운스를 끈다.
+
+    디바운스는 "직전 실행"과 비교하는데, 하루 2회 모드에서 직전 실행은 10시간 전이다.
+    연속 2회 조건을 그대로 두면 아침·저녁 모두 이상이어야 확정되어 10분짜리 급증은
+    영원히 확정되지 않는다. 고정 시각 모드에서는 검증 패널이 오탐을 거른다.
+    """
+    if os.getenv("RUN_TIMES", "").strip() and os.getenv("ANOMALY_CONSECUTIVE_N", "2") != "1":
+        LOGGER.info("고정 시각 모드: 연속 감지 조건(ANOMALY_CONSECUTIVE_N)을 1로 둡니다.")
+        os.environ["ANOMALY_CONSECUTIVE_N"] = "1"
+
+
 def run_once():
     load_dotenv()
+    apply_schedule_mode_defaults()
     graph = build_graph()
     try:
         result = graph.invoke({"metrics": {}, "baseline": {}, "off_hours": False})

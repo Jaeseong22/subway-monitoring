@@ -231,6 +231,20 @@ def is_ready_to_verify(action: dict[str, Any], now_iso: str | None = None,
     return _now(now_iso) >= executed_at + timedelta(minutes=cfg["verify_after_minutes"])
 
 
+def analysis_is_post_execution(action: dict[str, Any], latest: dict[str, Any]) -> bool:
+    """최신 분석 결과가 조치 실행 이후에 생성된 것인지.
+
+    실행을 촉발한 바로 그 결과로 검증하면 촉발 신호가 당연히 남아 있으므로 항상
+    "이상 지속"으로 판정되어 매번 롤백된다. 분석이 5분 간격일 때는 검증 대기(10분)
+    안에 새 결과가 생겨 드러나지 않았지만, 하루 2회 고정 시각 모드에서는 반드시 걸린다.
+    """
+    executed_at = _parse(action.get("executed_at"))
+    generated_at = _parse((latest or {}).get("generated_at"))
+    if not executed_at or not generated_at:
+        return False
+    return generated_at > executed_at
+
+
 def verify(action: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
     """실행 후 지표를 다시 보고 조치의 성패를 판정한다.
 

@@ -162,7 +162,9 @@ class ElasticsearchClient:
         return history
 
     def save_anomaly_result(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self.client.index(index=self.anomaly_index, document=payload)
+        # 워커가 검증용으로 분석을 강제 실행한 직후 바로 조회하므로, 색인이 검색 가능해질
+        # 때까지 기다린다(ES는 기본 1초 뒤에야 보인다).
+        return self.client.index(index=self.anomaly_index, document=payload, refresh="wait_for")
 
     def fetch_latest_analysis(self) -> dict[str, Any]:
         """가장 최근 분석 문서의 result/metrics/diagnosis를 반환한다(재계획·검증용)."""
@@ -174,11 +176,13 @@ class ElasticsearchClient:
         )
         hits = resp.get("hits", {}).get("hits", [])
         if not hits:
-            return {"result": {}, "metrics": {}, "diagnosis": None}
+            return {"result": {}, "metrics": {}, "diagnosis": None, "generated_at": None}
         source = hits[0].get("_source", {}) or {}
         return {"result": source.get("result", {}) or {},
                 "metrics": source.get("metrics", {}) or {},
-                "diagnosis": source.get("diagnosis")}
+                "diagnosis": source.get("diagnosis"),
+                # 검증은 '조치 실행 이후'의 분석 결과로만 해야 한다(워커가 판별).
+                "generated_at": source.get("generated_at") or source.get("@timestamp")}
 
     # ---------------------------------------------------------------- 자동 대응
     def fetch_recent_actions(self, size: int = 20) -> list[dict[str, Any]]:
