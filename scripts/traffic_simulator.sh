@@ -29,9 +29,11 @@ SPIKE_DURATION_MAX_MINUTES="${SPIKE_DURATION_MAX_MINUTES:-12}"
 SPIKE_MULTIPLIER="${SPIKE_MULTIPLIER:-10}"
 
 TOKEN=""
-STATIONS_FILE="$(mktemp)"
-HOT_STATIONS_FILE="$(mktemp)"
-trap 'rm -f "$STATIONS_FILE" "$HOT_STATIONS_FILE"; echo "[$(date '+%H:%M:%S')] 시뮬레이터 중지"; exit 0' INT TERM
+# 역 목록은 임시 파일이 아니라 배열로 들고 있는다. nohup으로 띄운 뒤 부모 셸이 끝나면
+# 임시 파일이 정리되어 역 ID가 비고 /stations//arrivals 같은 500 요청만 쏘게 된다.
+STATIONS=()
+HOT_STATIONS=()
+trap 'echo "[$(date '+%H:%M:%S')] 시뮬레이터 중지"; exit 0' INT TERM
 
 require_services() {
   if ! curl -fsS "$BACKEND_URL/actuator/health/readiness" >/dev/null; then
@@ -44,27 +46,30 @@ require_services() {
   fi
 }
 
-# 역 목록을 가져와 전체/인기역(앞쪽 일부) 두 파일로 나눈다. 인기역 쪽 비중을 높여
+# 역 목록을 가져와 전체/인기역(앞쪽 일부) 두 배열로 나눈다. 인기역 쪽 비중을 높여
 # 실사용처럼 특정 역에 조회가 몰리는 분포를 흉내낸다.
 fetch_stations() {
   local json
   json="$(curl -fsS "$BACKEND_URL/api/v1/stations")" || { echo "역 목록 조회 실패" >&2; exit 1; }
-  echo "$json" | python3 -c 'import json,sys; [print(s["id"]) for s in json.load(sys.stdin)]' > "$STATIONS_FILE"
-  local total
-  total=$(wc -l < "$STATIONS_FILE" | tr -d ' ')
-  if [[ "$total" -eq 0 ]]; then
+  STATIONS=()
+  while IFS= read -r id; do
+    [[ -n "$id" ]] && STATIONS+=("$id")
+  done < <(echo "$json" | python3 -c 'import json,sys; [print(s["id"]) for s in json.load(sys.stdin)]')
+  local total=${#STATIONS[@]}
+  if (( total == 0 )); then
     echo "역 목록이 비어 있습니다." >&2
     exit 1
   fi
-  head -n "$((total / 5 + 5))" "$STATIONS_FILE" > "$HOT_STATIONS_FILE"
-  echo "[$(date '+%H:%M:%S')] 역 목록 로드: 전체 ${total}개, 인기역 $(wc -l < "$HOT_STATIONS_FILE" | tr -d ' ')개"
+  HOT_STATIONS=("${STATIONS[@]:0:$((total / 5 + 5))}")
+  echo "[$(date '+%H:%M:%S')] 역 목록 로드: 전체 ${total}개, 인기역 ${#HOT_STATIONS[@]}개"
 }
 
-random_line() {
-  local file="$1"
-  local n
-  n=$(wc -l < "$file" | tr -d ' ')
-  sed -n "$(( (RANDOM % n) + 1 ))p" "$file"
+random_station() {
+  echo "${STATIONS[$((RANDOM % ${#STATIONS[@]}))]}"
+}
+
+random_hot_station() {
+  echo "${HOT_STATIONS[$((RANDOM % ${#HOT_STATIONS[@]}))]}"
 }
 
 # 테스트 계정을 준비하고 인기역 몇 개를 즐겨찾기로 등록해, 개인화 엔드포인트
@@ -88,7 +93,7 @@ ensure_test_account() {
 
   local i station_id
   for ((i = 0; i < FAVORITE_STATION_COUNT; i++)); do
-    station_id="$(random_line "$HOT_STATIONS_FILE")"
+    station_id="$(random_hot_station)"
     curl -fsS -X POST "$BACKEND_URL/api/v1/users/me/favorites/$station_id" \
       -H "Authorization: Bearer $TOKEN" >/dev/null 2>&1 || true
   done
@@ -115,7 +120,7 @@ hit_endpoint() {
   local roll=$((RANDOM % 100))
   if ((roll < 55)); then
     local pick
-    if ((RANDOM % 100 < 70)); then pick="$(random_line "$HOT_STATIONS_FILE")"; else pick="$(random_line "$STATIONS_FILE")"; fi
+    if ((RANDOM % 100 < 70)); then pick="$(random_hot_station)"; else pick="$(random_station)"; fi
     curl -fsS -o /dev/null -m 10 "$BACKEND_URL/api/v1/stations/$pick/arrivals" || true
   elif ((roll < 70)); then
     curl -fsS -o /dev/null -m 10 "$BACKEND_URL/api/v1/stations/arrivals/all" || true
