@@ -259,6 +259,14 @@ def analyze_with_llm(state: GraphState) -> GraphState:
     if os.getenv("ANALYSIS_MODE", "llm").lower() == "rules":
         return {"result": grounded}
 
+    # 정상이면 LLM을 부르지 않는다. 판정·수치는 어차피 통계 결과가 강제되고, 정상 상태의
+    # 서술("특이 이상 없음" + 요약)은 detection이 이미 만들어 둔다. 이 호출이 비용의
+    # 대부분(5분 주기면 하루 288회)이었고, 이것 때문에 하루 2회 모드로 물러나야 했다.
+    # LLM_SUMMARY_ON_NORMAL=true로 예전 동작(정상에도 요약 생성)을 되살릴 수 있다.
+    if (grounded.get("today_anomaly_count", 0) == 0
+            and os.getenv("LLM_SUMMARY_ON_NORMAL", "false").lower() != "true"):
+        return {"result": grounded}
+
     context = {
         "metrics": metrics,
         "baseline": baseline,
