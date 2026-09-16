@@ -165,7 +165,8 @@ services:
       - REMEDIATION_MAX_REPLICAS=${REMEDIATION_MAX_REPLICAS:-4}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       # 상시 관측: 기본 5분 간격. RUN_TIMES를 설정하면 고정 시각 모드로 동작한다.
-      # llm 모드는 매 실행마다 OpenAI를 호출하므로 비용을 제한하려면 RUN_TIMES(하루 2회 등)를 쓴다.
+      # 정상 판정이면 LLM을 부르지 않는다(LLM_SUMMARY_ON_NORMAL=true로 예전 동작).
+      - LLM_SUMMARY_ON_NORMAL=${LLM_SUMMARY_ON_NORMAL:-false}
       # 고정 시각 모드에서는 연속 N회 디바운스가 자동으로 꺼진다(main.apply_schedule_mode_defaults).
       - RUN_INTERVAL_MINUTES=${RUN_INTERVAL_MINUTES:-5}
       - RUN_TIMES=${RUN_TIMES:-}
