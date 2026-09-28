@@ -168,5 +168,47 @@ class DiagnosisLoopTest(unittest.TestCase):
         self.assertIn("error", str(result["investigation"][0]["observation"]).lower() + "error")
 
 
+class ExtraContentPassthroughTest(unittest.TestCase):
+    """공급자 부가 정보(Gemini 3의 thought_signature)를 그대로 되돌려준다.
+
+    빼고 보내면 Gemini가 400 'Function call is missing a thought_signature'로 거절해
+    2스텝째부터 진단이 통째로 생략된다.
+    """
+
+    SIGNATURE = {"google": {"thought_signature": "sig-abc"}}
+
+    def test_signature_is_echoed_back_in_assistant_message(self):
+        seen = []
+
+        def caller(messages, _schemas):
+            seen.append([dict(m) for m in messages])
+            if len(seen) == 1:
+                return {"content": "", "tool_calls": [
+                    {"id": "call_1", "name": "breakdown_by",
+                     "arguments": {"field": "endpoint"},
+                     "extra_content": self.SIGNATURE}]}
+            return {"content": '{"root_cause": "x", "confidence": "high", "evidence": []}'}
+
+        diagnosis.run({"detected_keys": ["traffic"]}, {}, [], caller, max_steps=3)
+
+        second_turn = seen[1]
+        assistant = [m for m in second_turn if m.get("role") == "assistant"][0]
+        self.assertEqual(assistant["tool_calls"][0].get("extra_content"), self.SIGNATURE)
+
+    def test_absent_signature_adds_no_key(self):
+        seen = []
+
+        def caller(messages, _schemas):
+            seen.append([dict(m) for m in messages])
+            if len(seen) == 1:
+                return {"content": "", "tool_calls": [
+                    {"id": "call_1", "name": "breakdown_by", "arguments": {"field": "endpoint"}}]}
+            return {"content": '{"root_cause": "x", "confidence": "high", "evidence": []}'}
+
+        diagnosis.run({"detected_keys": ["traffic"]}, {}, [], caller, max_steps=3)
+        assistant = [m for m in seen[1] if m.get("role") == "assistant"][0]
+        self.assertNotIn("extra_content", assistant["tool_calls"][0])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
