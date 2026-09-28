@@ -327,6 +327,25 @@ AI 서비스는 Elasticsearch의 `subway-logs-*` 인덱스에서 최근 로그�
 - **디바운스가 꺼진다.** 연속 N회 조건은 "직전 실행"과 비교하는데 직전 실행이 10시간 전이라 10분짜리 급증은 영원히 확정되지 않는다. 고정 시각 모드에서는 `ANOMALY_CONSECUTIVE_N`을 1로 두고 검증 패널이 오탐을 거른다.
 - **자동 대응 검증이 분석을 강제 실행한다.** 워커는 조치 실행 이후에 생성된 분석 결과로만 검증한다. 검증 시점에 새 결과가 없으면 `docker exec <REMEDIATION_AI_CONTAINER>`로 분석을 한 번 돌린 뒤 판정한다. 촉발 결과로 검증하면 촉발 신호가 당연히 남아 있어 매번 롤백되기 때문이다.
 
+#### LLM 공급자 — 무료 Gemini 키로도 돌아간다
+
+세 에이전트 모두 OpenAI 호환 엔드포인트를 쓰므로, 환경변수 세 개만 바꾸면 공급자를 바꿀 수 있다(코드 변경 없음).
+
+```bash
+OPENAI_API_BASE=https://generativelanguage.googleapis.com/v1beta/openai/
+OPENAI_API_KEY=<Google AI Studio 키>
+OPENAI_MODEL=gemini-3.1-flash-lite
+```
+
+같은 평가 셋으로 비교한 결과는 `ai_service/evals/baseline*.md`에 있다. 무료 `gemini-3.1-flash-lite`가 유료 `gpt-4o-mini`보다 검증 패널 합의(92→100%)와 진단 정확성(92→100%)이 높고, 조사 효율만 조금 낮다(88→81%).
+
+주의할 점 두 가지:
+
+- **모델마다 일일 한도가 다르다.** 최신 `gemini-3.8-flash`는 무료 20회/일이라 평가 한 번(36회)도 못 돌린다. 한도를 넘기면 검증 렌즈가 기권 처리되어 *성능이 아니라 호출 실패*가 결과에 찍힌다. `flash-lite` 계열을 쓸 것.
+- **Gemini 3 계열은 `thought_signature`를 되돌려줘야 한다.** 도구 호출 응답에 실려 오는 이 값을 다음 턴에 그대로 보내지 않으면 2스텝째에 400으로 거절되어 진단 루프가 통째로 죽는다. `langchain-openai`가 이 필드를 버리므로 진단 호출자만 OpenAI SDK를 직접 쓴다(`graph/diagnosis.py`).
+
+429는 `graph/llm_retry.py`가 흡수한다. 분당 제한이면 서버가 알려준 만큼 기다렸다 재시도하고, 일일 한도 소진이면(quotaId에 `PerDay`) 기다려도 안 풀리므로 즉시 포기한다.
+
 #### LLM의 역할과 한계
 
 `ANALYSIS_MODE=llm`이어도 **판정과 수치는 LLM이 바꿀 수 없다.** LLM 응답은 `graph/llm_merge.py`에서 병합되며, 채택되는 것은 제목·요약·근거·조치사항 등 **서술 텍스트뿐**이다. `overall_status`, `severity`, 이상 건수, `metric_trend` 수치는 통계 결과가 강제된다. 프롬프트로 "통계 결과를 따르라"고 지시하는 것만으로는 모델이 판정을 뒤집는 것을 막을 수 없기 때문이다.

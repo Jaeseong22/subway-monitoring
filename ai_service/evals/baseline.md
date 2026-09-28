@@ -55,3 +55,31 @@ python evals/run.py                 # A, B
 python evals/run.py --repeat 3      # + C(일관성)
 python evals/run.py --dump-reasons  # + D(수동 채점용 근거 덤프)
 ```
+
+## 실행 #2 — 2026-09-28 (모델 교체: gemini-3.1-flash-lite, 무료 티어)
+
+OpenAI 유료 키를 Gemini 무료 키로 바꿔도 되는지 확인하려고 같은 12 케이스를 돌렸다.
+코드 변경 없이 환경변수만 바꾼다(`OPENAI_API_BASE=https://generativelanguage.googleapis.com/v1beta/openai/`).
+
+| 축 | gpt-4o-mini (#1) | gemini-3.1-flash-lite (#2) |
+|---|---|---|
+| A. 판정 정확도 (경계 제외) | 10/10 (100%) | **10/10 (100%)** |
+| — false negative (위험) | 0건 | 0건 |
+| — false positive | 0건 | 0건 |
+| B. 심사관 합의 | 33/36 (92%) | **36/36 (100%)** |
+
+검증 패널은 무료 모델로 바꿔도 손해가 없다. 합의율은 오히려 올랐다.
+
+### 첫 시도는 무효였다 (측정 자체가 틀린 경우)
+
+처음 `gemini-3.8-flash`로 돌렸을 때 A 5/10, B 58%가 나왔는데 **모델 성능이 아니라
+호출 실패를 측정한 것이었다.** 무료 티어 일일 한도(이 모델은 20회/일)를 넘겨 429가
+나면 `verification.run`은 그 렌즈를 기권 처리하므로, 판정이 "모델이 그렇게 판단해서"가
+아니라 "호출이 막혀서" 달라진다. 평가 결과가 나쁘게 나오면 모델을 의심하기 전에
+호출이 전부 성공했는지부터 봐야 한다.
+
+- 모델마다 일일 한도가 다르다. 최신 `gemini-3.8-flash`는 20회/일로 평가 한 번(36회)도
+  못 돌린다. `gemini-3.1-flash-lite`는 같은 평가를 429 없이 완주했다.
+- 서버는 일일 소진에도 "retry in 56s"를 주므로 그대로 믿고 재시도하면 헛되이 기다린다.
+  `graph/llm_retry.py`가 quotaId로 분당/일일을 구분해, 분당이면 기다렸다 재시도하고
+  일일이면 즉시 포기한다.
