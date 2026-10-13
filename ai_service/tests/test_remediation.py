@@ -127,9 +127,25 @@ class InstanceCountTest(unittest.TestCase):
     def setUp(self):
         self.count = detection.count_api_instances
 
-    def golden(self, instance_id, role="api", minute="2026-07-20T12:05"):
-        return {"@timestamp": f"{minute}:00.000Z", "instance_id": instance_id,
+    def golden(self, instance_id, role="api", minute="2026-07-20T12:05", second="00"):
+        return {"@timestamp": f"{minute}:{second}.000Z", "instance_id": instance_id,
                 "instance_role": role, "event_name": "golden_signals_summary"}
+
+    def test_counts_instances_logging_at_different_seconds(self):
+        """인스턴스마다 매분 지표를 남기는 초가 다르다. 분석이 그 사이에 돌면 한쪽이
+        아직 이번 분에 기록하지 않았을 뿐인데 죽은 것으로 세면 안 된다(리허설에서 2대를 1대로 집계)."""
+        events = [
+            self.golden("api-1", minute="2026-07-20T12:04", second="00"),
+            self.golden("api-2", minute="2026-07-20T12:04", second="31"),
+            self.golden("api-1", minute="2026-07-20T12:05", second="00"),
+        ]
+        self.assertEqual(self.count(events), 2)
+
+    def test_nanosecond_timestamps_are_parsed(self):
+        """Logstash가 남기는 9자리 소수점 타임스탬프."""
+        events = [{"@timestamp": "2026-10-13T01:57:31.192839262Z", "instance_id": "a"},
+                  {"@timestamp": "2026-10-13T01:58:00.119980720Z", "instance_id": "b"}]
+        self.assertEqual(self.count(events), 2)
 
     def test_counts_distinct_api_instances(self):
         events = [self.golden("a"), self.golden("b"), self.golden("a")]
