@@ -11,6 +11,7 @@ from es_client import ElasticsearchClient
 from graph import (
     detection,
     diagnosis as diagnosis_agent,
+    llm_retry,
     remediation,
     verification as verification_panel,
 )
@@ -283,7 +284,7 @@ def analyze_with_llm(state: GraphState) -> GraphState:
     )
     prompt = build_anomaly_prompt(context)
     try:
-        response = llm.invoke(prompt)
+        response = llm_retry.call_with_retry(lambda: llm.invoke(prompt), what="분석 요약")
         content = response.content if hasattr(response, "content") else str(response)
         parsed = json.loads(_strip_code_fences(content))
         # LLM은 서술 텍스트만 바꿀 수 있다. 판정/수치는 통계 결과로 강제한다.

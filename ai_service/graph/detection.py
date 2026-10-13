@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -111,6 +112,26 @@ def compute_baseline_stats(events: list[dict[str, Any]]) -> dict[str, Any]:
     return stats
 
 
+# 인스턴스는 골든시그널 요약을 60초마다 남긴다. 한 주기 + 여유분.
+LIVE_WINDOW_SECONDS = 90
+
+
+def _parse_ts(value: Any) -> datetime | None:
+    """ES 타임스탬프 파싱. Logstash는 소수점 9자리(나노초)를 남기므로 6자리로 자른다."""
+    if not value:
+        return None
+    text = str(value).replace("Z", "+00:00")
+    m = re.match(r"^(.*T\d\d:\d\d:\d\d)(\.\d+)?(.*)$", text)
+    if not m:
+        return None
+    frac = (m.group(2) + "000000")[:7] if m.group(2) else ""
+    try:
+        ts = datetime.fromisoformat(m.group(1) + frac + m.group(3))
+    except ValueError:
+        return None
+    return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+
+
 def count_api_instances(golden_events: list[dict[str, Any]]) -> int:
     """가동 중인 **API 인스턴스** 수. 자동 확장 판단의 입력이므로 정확해야 한다.
 
@@ -118,19 +139,22 @@ def count_api_instances(golden_events: list[dict[str, Any]]) -> int:
     1. 수집 전용 프로세스(collector)도 같은 앱이라 골든시그널을 남기지만, 로드밸런서
        뒤에 있지 않으므로 확장 대상이 아니다. `instance_role`로 제외한다.
     2. 재시작·축소된 인스턴스의 지표가 분석 창(수 분)에 남아 있어 그대로 세면 과다 집계된다.
-       가장 최근 1분 버킷에 지표를 남긴 인스턴스만 "지금 살아 있는" 것으로 본다.
+       가장 최근 기록으로부터 LIVE_WINDOW_SECONDS 안에 지표를 남긴 인스턴스만 "지금 살아
+       있는" 것으로 본다. 같은 분(minute) 버킷으로 자르면 매분 0초에 남기는 인스턴스와
+       31초에 남기는 인스턴스가 엇갈려, 분석 시점에 따라 2대가 1대로 집계된다.
     """
     api_events = [e for e in golden_events
                   if str(e.get("instance_role") or "api").lower() != "collector"]
     if not api_events:
         return 0
 
-    # 분 단위(YYYY-MM-DDTHH:MM)로 잘라 가장 최근 버킷에 살아 있던 인스턴스만 센다.
-    stamped = [e for e in api_events if e.get("@timestamp") and e.get("instance_id")]
+    stamped = [(_parse_ts(e.get("@timestamp")), str(e["instance_id"]))
+               for e in api_events if e.get("instance_id")]
+    stamped = [(ts, iid) for ts, iid in stamped if ts is not None]
     if stamped:
-        latest_bucket = max(str(e["@timestamp"])[:16] for e in stamped)
-        live = {str(e["instance_id"]) for e in stamped
-                if str(e["@timestamp"])[:16] == latest_bucket}
+        latest = max(ts for ts, _ in stamped)
+        live = {iid for ts, iid in stamped
+                if (latest - ts).total_seconds() <= LIVE_WINDOW_SECONDS}
         if live:
             return len(live)
 

@@ -35,6 +35,8 @@ def judge_root_cause(expected_summary: str, actual_root_cause: str, actual_evide
     """별도 LLM으로 근본원인 정확성을 0-2 채점한다."""
     from langchain_openai import ChatOpenAI
 
+    from graph import llm_retry
+
     llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"), temperature=0.0,
                      model_kwargs={"response_format": {"type": "json_object"}})
     prompt = [
@@ -51,7 +53,7 @@ def judge_root_cause(expected_summary: str, actual_root_cause: str, actual_evide
             f"AI의 근거: {json.dumps(actual_evidence, ensure_ascii=False)}"},
     ]
     try:
-        resp = llm.invoke(prompt)
+        resp = llm_retry.call_with_retry(lambda: llm.invoke(prompt), what="judge")
         content = resp.content if isinstance(resp.content, str) else str(resp.content)
         data = json.loads(content)
         score = int(data.get("score", 0))

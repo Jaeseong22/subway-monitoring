@@ -63,6 +63,9 @@ _GUARDRAILS = (
     "instance count as a reason to distrust an alert.\n"
     "- A baseline of 30+ samples. That is sufficient; only distrust the baseline when it "
     "has FEWER THAN 5 samples.\n"
+    "- Low CPU or memory usage. Traffic is its own signal: light endpoints can absorb many "
+    "times their usual requests without raising CPU, and the spike still matters. NEVER cite "
+    "low resource usage as a reason to distrust a traffic, error, or latency alert.\n"
     "- A large, sustained deviation. If a metric is 3x+ over a well-sampled baseline and "
     "persists for several minutes, it is a real problem regardless of instance count.\n"
     "Only call it a false positive with a concrete signal of noise: a very small baseline "
@@ -168,17 +171,29 @@ def make_openai_caller(model: str | None = None, temperature: float = 0.0) -> Le
 
     from langchain_openai import ChatOpenAI
 
+    from graph import llm_retry
+
     llm = ChatOpenAI(model=model or os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
                      temperature=temperature,
                      model_kwargs={"response_format": {"type": "json_object"}})
 
     def _caller(system: str, user: str) -> dict[str, Any]:
-        ai = llm.invoke([{"role": "system", "content": system},
-                         {"role": "user", "content": user}])
+        # 심사관 3명을 연속으로 부르므로 무료 티어의 분당 제한에 걸리기 쉽다.
+        ai = llm_retry.call_with_retry(
+            lambda: llm.invoke([{"role": "system", "content": system},
+                                {"role": "user", "content": user}]),
+            what="검증 렌즈")
         content = ai.content if isinstance(ai.content, str) else str(ai.content)
         try:
-            return json.loads(content)
+            parsed = json.loads(content)
         except (json.JSONDecodeError, TypeError):
             return {"verdict": "uncertain", "reason": "응답 파싱 실패"}
+        # 일부 모델은 JSON 모드에서 객체 대신 [{...}] 배열을 돌려준다. 그대로 넘기면
+        # 호출부가 dict로 다루다 터지므로 여기서 첫 객체를 꺼낸다.
+        if isinstance(parsed, list):
+            parsed = next((x for x in parsed if isinstance(x, dict)), None)
+        if not isinstance(parsed, dict):
+            return {"verdict": "uncertain", "reason": "응답 형식이 객체가 아님"}
+        return parsed
 
     return _caller

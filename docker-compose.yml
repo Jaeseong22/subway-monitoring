@@ -164,6 +164,10 @@ services:
       - REMEDIATION_AUTO_APPROVE=${REMEDIATION_AUTO_APPROVE:-false}
       - REMEDIATION_MAX_REPLICAS=${REMEDIATION_MAX_REPLICAS:-4}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # 공급자 교체(예: Gemini OpenAI 호환 엔드포인트)는 이 두 값으로 한다. 빠지면 키만
+      # 바뀐 채 기본 OpenAI 주소로 호출해 전부 인증 실패한다.
+      - OPENAI_API_BASE=${OPENAI_API_BASE:-https://api.openai.com/v1}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
       # 상시 관측: 기본 5분 간격. RUN_TIMES를 설정하면 고정 시각 모드로 동작한다.
       # 정상 판정이면 LLM을 부르지 않는다(LLM_SUMMARY_ON_NORMAL=true로 예전 동작).
       - LLM_SUMMARY_ON_NORMAL=${LLM_SUMMARY_ON_NORMAL:-false}

@@ -74,6 +74,19 @@ def _build_user_prompt(anomaly: dict[str, Any], metrics: dict[str, Any]) -> str:
     )
 
 
+def _assistant_tool_call(call: dict[str, Any], fallback_id: str) -> dict[str, Any]:
+    """대화에 다시 넣을 assistant 도구 호출 메시지 한 건을 만든다."""
+    message = {
+        "id": call.get("id") or fallback_id,
+        "type": "function",
+        "function": {"name": call["name"],
+                     "arguments": json.dumps(call.get("arguments", {}))},
+    }
+    if call.get("extra_content"):
+        message["extra_content"] = call["extra_content"]
+    return message
+
+
 def run(anomaly: dict[str, Any], metrics: dict[str, Any], events: list[dict[str, Any]],
         llm_caller: LlmCaller, max_steps: int = 6) -> dict[str, Any]:
     """진단 루프를 돈다. 진단 결과 dict를 반환한다(대시보드/저장용).
@@ -106,12 +119,14 @@ def run(anomaly: dict[str, Any], metrics: dict[str, Any], events: list[dict[str,
             return verdict
 
         # assistant의 도구 호출 메시지를 대화에 추가한다.
+        # extra_content는 공급자별 부가 정보(Gemini 3의 thought_signature 등)다. 이걸
+        # 빼고 돌려주면 Gemini는 400(missing thought_signature)으로 거절하므로,
+        # 받은 그대로 되돌려준다. 다른 공급자는 이 키가 없으니 영향이 없다.
         messages.append({
             "role": "assistant",
             "content": response.get("content", ""),
             "tool_calls": [
-                {"id": tc.get("id", f"call_{step}_{i}"), "type": "function",
-                 "function": {"name": tc["name"], "arguments": json.dumps(tc.get("arguments", {}))}}
+                _assistant_tool_call(tc, f"call_{step}_{i}")
                 for i, tc in enumerate(tool_calls)
             ],
         })
@@ -182,19 +197,41 @@ def _skipped(reason: str, investigation: list[dict[str, Any]]) -> dict[str, Any]
 
 
 def make_openai_caller(model: str | None = None, temperature: float = 0.1) -> LlmCaller:
-    """실제 OpenAI tool-use 호출자를 만든다. import를 함수 안에 두어 langchain 없이도
-    이 모듈이 import되게 한다(테스트는 mock caller를 쓴다)."""
-    from langchain_openai import ChatOpenAI
+    """실제 tool-use 호출자를 만든다. import를 함수 안에 두어 의존성 없이도 모듈이 import된다.
 
-    llm = ChatOpenAI(model=model or os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-                     temperature=temperature).bind_tools(tools.TOOL_SCHEMAS)
+    langchain이 아니라 OpenAI SDK를 직접 쓴다. langchain-openai는 도구 호출을
+    {id, type, function}으로 필터링해 공급자 부가 정보를 버리는데, Gemini 3 계열은
+    다음 턴에 thought_signature를 되돌려주지 않으면 400으로 거절한다(2스텝째부터 진단이
+    통째로 생략된다). 이 루프는 메시지를 평범한 dict로 주고받으므로 SDK를 직접 쓰면
+    받은 필드를 그대로 되돌려줄 수 있다.
+    """
+    from openai import OpenAI
 
-    def _caller(messages: list[dict[str, Any]], _schemas: list[dict[str, Any]]) -> dict[str, Any]:
-        ai = llm.invoke(messages)
+    from graph import llm_retry
+
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"),
+                    base_url=os.getenv("OPENAI_API_BASE") or None)
+    model_name = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+    def _caller(messages: list[dict[str, Any]], schemas: list[dict[str, Any]]) -> dict[str, Any]:
+        # 최대 6스텝을 연속으로 부르므로 무료 티어의 요청 제한에 걸리기 쉽다.
+        resp = llm_retry.call_with_retry(
+            lambda: client.chat.completions.create(
+                model=model_name, temperature=temperature,
+                messages=messages, tools=schemas),
+            what="진단 에이전트")
+        message = resp.choices[0].message
         calls = []
-        for tc in getattr(ai, "tool_calls", None) or []:
-            calls.append({"id": tc.get("id"), "name": tc.get("name"), "arguments": tc.get("args", {})})
-        return {"content": ai.content if isinstance(ai.content, str) else str(ai.content),
-                "tool_calls": calls}
+        for tc in (message.tool_calls or []):
+            raw = tc.model_dump() if hasattr(tc, "model_dump") else {}
+            try:
+                args = json.loads(tc.function.arguments or "{}")
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+            call = {"id": tc.id, "name": tc.function.name, "arguments": args}
+            if raw.get("extra_content"):
+                call["extra_content"] = raw["extra_content"]
+            calls.append(call)
+        return {"content": message.content or "", "tool_calls": calls}
 
     return _caller
