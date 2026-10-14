@@ -12,6 +12,8 @@ services:
   ai_model:
     environment:
       - RUN_INTERVAL_MINUTES=1
-      - LOOKBACK_MINUTES=5
-      - ANOMALY_CONSECUTIVE_N=2
+      # 짧은 구간이어야 급증 직후 평균이 바로 오른다. 골든시그널이 60초마다 쌓이므로 2분이면 2개 표본.
+      - LOOKBACK_MINUTES=2
+      # 시연에서는 한 번 감지되면 바로 확정한다(평소에는 연속 2회 확인).
+      - ANOMALY_CONSECUTIVE_N=1
       - REMEDIATION_COOLDOWN_MINUTES=5
