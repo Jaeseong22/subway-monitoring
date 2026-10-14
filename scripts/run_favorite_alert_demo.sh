@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -f "$ROOT_DIR/.env" ]]; then
+  set -a; . "$ROOT_DIR/.env"; set +a
+fi
+
 ES_URL="${ELASTICSEARCH_URL:-http://localhost:9200}"
 BACKEND_URL="${BACKEND_URL:-http://localhost:8080}"
 MYSQL_CONTAINER="${MYSQL_CONTAINER:-subway_mysql}"
 MYSQL_USER="${MYSQL_USER:-subway}"
-MYSQL_PASSWORD="${MYSQL_PASSWORD:-subway123}"
+MYSQL_PASSWORD="${MYSQL_PASSWORD:-${DB_PASSWORD:?DB_PASSWORD(.env)가 필요합니다}}"
 MYSQL_DATABASE="${MYSQL_DATABASE:-subway_monitoring}"
 USER_EMAIL="${USER_EMAIL:-ljs870346@gmail.com}"
 DEMO_TAG="favorite-alert-demo"

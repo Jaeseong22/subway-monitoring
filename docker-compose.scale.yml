@@ -50,7 +50,7 @@ services:
       - DB_PORT=3306
       - DB_NAME=subway_monitoring
       - DB_USER=subway
-      - DB_PASSWORD=subway123
+      - DB_PASSWORD=${DB_PASSWORD:?DB_PASSWORD를 .env에 설정하세요}
       - LOGSTASH_HOST=logstash:50000
       - ELASTICSEARCH_URL=http://elasticsearch:9200
       - ANOMALY_INDEX=subway-anomaly-results

@@ -147,6 +147,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Prepare env file
+        # 비밀번호는 .env에서만 받으므로 검증용으로 예시 파일을 쓴다.
+        run: cp .env.example .env
+
       - name: Validate base compose
         run: docker compose -f docker-compose.yml config --quiet
 
