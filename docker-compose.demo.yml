@@ -1,0 +1,17 @@
+# 시연 오버레이 (opt-in). scripts/demo.sh가 확장 오버레이와 함께 겹쳐 쓴다.
+#
+# 평소 설정(5분 주기, 30분 분석 구간)으로는 급증 → 확정 → 확장 → 검증까지 30분 가까이
+# 걸려 발표 시간 안에 보여줄 수 없다. 시연 동안만 주기를 줄인다.
+# 확장 후 검증 대기(REMEDIATION_VERIFY_AFTER_MINUTES)는 호스트 워커가 읽으므로
+# scripts/demo.sh에서 워커를 띄울 때 넘긴다.
+#
+#   scripts/demo.sh up       # 시연 모드
+#   scripts/demo.sh normal   # 평소 모드로 복귀
+
+services:
+  ai_model:
+    environment:
+      - RUN_INTERVAL_MINUTES=1
+      - LOOKBACK_MINUTES=5
+      - ANOMALY_CONSECUTIVE_N=2
+      - REMEDIATION_COOLDOWN_MINUTES=5

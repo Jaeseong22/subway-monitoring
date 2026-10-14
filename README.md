@@ -98,7 +98,14 @@ VITE_GOOGLE_CLIENT_ID=your_google_oauth_web_client_id
 ADMIN_EMAIL=
 ADMIN_PASSWORD=
 ADMIN_NAME=관리자
+
+# DB 비밀번호. compose와 설정 파일에는 비밀번호가 없고 여기서만 읽는다.
+DB_PASSWORD=
+MYSQL_ROOT_PASSWORD=
 ```
+
+`DB_PASSWORD`, `MYSQL_ROOT_PASSWORD`가 비어 있으면 `docker compose`가 기동 전에 멈춥니다.
+MySQL 볼륨(`mysql_data`)은 처음 만들 때의 비밀번호로 고정되므로, 값을 바꾸려면 볼륨을 새로 만들어야 합니다.
 
 `GOOGLE_CLIENT_ID`는 백엔드에서 Google ID Token을 검증할 때 사용합니다.
 
@@ -471,6 +478,30 @@ docker pull ghcr.io/jaeseong22/subway-monitoring/ai-service:0.2.0
 > ```
 >
 > Mac에서 로컬 개발할 때는 이미지를 받지 말고 `docker compose up -d --build`로 직접 빌드하는 편이 빠릅니다(네이티브 arm64로 빌드됩니다).
+
+## 시연 (최종 발표용)
+
+평소 설정(5분 주기)으로는 급증 → 확장 → 검증까지 30분 가까이 걸리므로, 시연 동안만
+`docker-compose.demo.yml`로 분석 주기를 1분으로 줄입니다. 진행은 `scripts/demo.sh` 하나로 합니다.
+
+```bash
+scripts/demo.sh up        # 시연 모드 기동 + 이전 조치 정리 + 워커(실제 실행)·시뮬레이터 시작
+scripts/demo.sh spike 8   # 실제 백엔드에 약 10배 요청을 8분간
+scripts/demo.sh status    # 백엔드 대수, 최근 분석, 최근 조치
+scripts/demo.sh reset     # 승인 대기·실행 중 조치를 만료 처리
+scripts/demo.sh normal    # 워커·시뮬레이터 중지, 평소 설정·1대로 복귀
+```
+
+| 항목 | 평소 | 시연 |
+|---|---|---|
+| 분석 주기 | 5분 | 1분 |
+| 분석 구간 | 30분 (`.env`) | 5분 |
+| 확장 후 검증 대기 | 10분 | 5분 |
+| 확장 후 쿨다운 | 15분 | 5분 |
+
+검증 대기는 급증(8분)이 끝난 뒤에 검증하도록 5분으로 둡니다. 급증이 끝나기 전에 검증하면 신호가
+남아 있어 FAILED로 판정되고 재계획이 "한 대 더"를 제안합니다. 이전 리허설의 조치가 승인 대기로 남아
+있으면 새 제안이 만들어지지 않으므로 `up`이 시작할 때 정리합니다.
 
 ## 이상탐지 데모
 

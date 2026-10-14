@@ -10,13 +10,14 @@ services:
     container_name: subway_mysql
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: root
+      # 비밀번호는 저장소에 두지 않고 .env에서 받는다(.env.example 참고).
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD를 .env에 설정하세요}
       MYSQL_DATABASE: subway_monitoring
       MYSQL_USER: subway
-      MYSQL_PASSWORD: subway123
+      MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD를 .env에 설정하세요}
       TZ: Asia/Seoul
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-proot"]
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -97,7 +98,7 @@ services:
       - DB_PORT=3306
       - DB_NAME=subway_monitoring
       - DB_USER=subway
-      - DB_PASSWORD=subway123
+      - DB_PASSWORD=${DB_PASSWORD:?DB_PASSWORD를 .env에 설정하세요}
       - LOGSTASH_HOST=logstash:50000
       - ELASTICSEARCH_URL=http://elasticsearch:9200
       - ANOMALY_INDEX=subway-anomaly-results
