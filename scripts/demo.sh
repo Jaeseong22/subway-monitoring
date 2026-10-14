@@ -6,7 +6,12 @@ set -euo pipefail
 #
 # Usage:
 #   scripts/demo.sh up           시연 모드로 기동 + 이전 조치 정리 + 워커·시뮬레이터 시작
-#   scripts/demo.sh spike [분]   실제 백엔드에 약 10배 요청을 보낸다 (기본 8분)
+#   scripts/demo.sh spike [분]   실제 백엔드에 약 10배 요청을 보낸다 (기본 8분, 75초 뒤 즉시 분석)
+#   scripts/demo.sh anomaly <종류>  이상 종류별 시연 (정기 분석을 멈추고 결과를 고정)
+#                                traffic-spike | saturation | latency | api-failure |
+#                                scheduler-failure | collection-drop
+#   scripts/demo.sh restore      종류별 시연을 끝내고 실제 로그 분석으로 복귀
+#   scripts/demo.sh analyze      지금 바로 분석 한 번 실행
 #   scripts/demo.sh status       서버 대수, 최근 분석, 최근 조치
 #   scripts/demo.sh reset        열려 있는 조치(승인 대기 등)를 만료 처리
 #   scripts/demo.sh normal       워커·시뮬레이터를 끄고 평소 설정·1대로 복귀
@@ -100,6 +105,35 @@ cmd_spike() {
   echo "$pid" > "$SPIKE_PID"
   (sleep "$((minutes * 60))"; kill "$pid" 2>/dev/null; rm -f "$SPIKE_PID") >/dev/null 2>&1 &
   echo "$(date '+%H:%M:%S') 급증 시작 (${minutes}분간)"
+  # 골든시그널은 서버마다 60초에 한 번 기록된다. 급증이 반영된 기록이 쌓일 시간을 두고
+  # 정기 주기를 기다리지 않고 바로 분석한다.
+  (sleep 75; analyze_now) >> "$LOG_DIR/demo_analyze.log" 2>&1 &
+  echo "75초 뒤 즉시 분석합니다. 진행은 scripts/demo.sh status 로 확인하세요."
+}
+
+analyze_now() {
+  docker exec subway_ai_model python -c 'import logging; logging.basicConfig(level="INFO", format="%(asctime)s %(levelname)s [%(name)s] %(message)s"); from main import run_once; run_once()' 2>&1 \
+    | grep -E "분석 완료|검증 패널:|진단 완료|제안 생성" || true
+}
+
+# 대시보드는 가장 최근 분석 1건을 보여준다. 종류별 시연 중에는 정기 분석이 결과를 덮어쓰지
+# 않도록 AI 서비스 컨테이너를 멈추고, 가짜 로그로 일회성 분석을 돌린다.
+cmd_anomaly() {
+  local kind="${1:-}"
+  if [[ -z "$kind" ]]; then
+    echo "종류: traffic-spike | saturation | latency | api-failure | scheduler-failure | collection-drop" >&2
+    exit 1
+  fi
+  docker stop subway_ai_model >/dev/null
+  echo "$(date '+%H:%M:%S') ${kind} 시연 — 탐지·검증·진단 실행 중 (LLM 포함 30초~1분)"
+  scripts/run_anomaly_demo.sh "$kind"
+  echo "$(date '+%H:%M:%S') 대시보드를 새로고침하세요. 끝나면 scripts/demo.sh restore"
+}
+
+cmd_restore() {
+  scripts/run_anomaly_demo.sh restore
+  docker start subway_ai_model >/dev/null
+  echo "정기 분석을 다시 시작했습니다."
 }
 
 cmd_status() {
@@ -131,8 +165,11 @@ cmd_normal() {
 case "${1:-}" in
   up) cmd_up ;;
   spike) cmd_spike "${2:-8}" ;;
+  anomaly) cmd_anomaly "${2:-}" ;;
+  restore) cmd_restore ;;
+  analyze) analyze_now ;;
   status) cmd_status ;;
   reset) reset_actions ;;
   normal) cmd_normal ;;
-  *) sed -n '4,12p' "$0"; exit 1 ;;
+  *) sed -n '4,17p' "$0"; exit 1 ;;
 esac

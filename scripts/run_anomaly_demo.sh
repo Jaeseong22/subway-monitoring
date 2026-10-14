@@ -13,13 +13,21 @@ SCENARIO="${1:-}"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/run_anomaly_demo.sh <normal|api-failure|traffic-spike|scheduler-failure|restore>
+Usage: scripts/run_anomaly_demo.sh <scenario>
 
-  normal             Insert normal synthetic logs and publish a normal analysis.
-  api-failure        Insert detailed API timeout/429 failures and publish a critical analysis.
-  traffic-spike      Insert a traffic saturation scenario and recommend horizontal scaling.
-  scheduler-failure  Insert a scheduler failure scenario and publish a critical analysis.
-  restore            Analyze current real logs and return the dashboard to live status.
+  normal             정상 로그
+  traffic-spike      요청량 급증 (자원·응답시간은 정상)
+  saturation         CPU·메모리 포화 (요청량은 정상)
+  latency            응답시간 급증 (요청량·자원은 정상)
+  api-failure        서울 API 타임아웃·429 (오류율 30%)
+  scheduler-failure  수집 스케줄러 실패
+  collection-drop    도착정보 수집량 급감 (기준선의 30%)
+  restore            실제 로그로 다시 분석해 대시보드를 실제 상태로 되돌림
+
+가짜 로그를 별도 인덱스(subway-demo-logs)에 넣고, AI 서비스 컨테이너와 같은 설정으로
+실제 탐지·검증 패널·원인 진단을 한 번 돌린다. 로그만 만든 것이고 판정은 실제 로직이다.
+가짜 시나리오가 확장 제안을 남기면 실제 급증 시연의 제안을 막으므로 기본은 제안을 끈다
+(DEMO_REMEDIATION_ENABLED=true로 켤 수 있음).
 EOF
 }
 
@@ -134,20 +142,23 @@ put_traffic_event() {
   local memory_percent="$4"
   local queue_depth="$5"
   local minutes_ago="$6"
+  local avg_ms="${7:-860}"
+  local p95_ms="${8:-1420}"
   local timestamp
   timestamp="$(iso_minutes_ago "$minutes_ago")"
   curl -fsS -X POST "$ES_URL/$DEMO_INDEX/_doc" \
     -H 'Content-Type: application/json' \
-    -d "{\"@timestamp\":\"$timestamp\",\"event_type\":\"TRAFFIC\",\"event_name\":\"golden_signals_summary\",\"success\":\"true\",\"endpoint\":\"/api/v1/stations/arrivals/all\",\"request_count\":\"$request_count\",\"requests_per_second\":\"$requests_per_second\",\"cpu_percent\":\"$cpu_percent\",\"memory_percent\":\"$memory_percent\",\"queue_depth\":\"$queue_depth\",\"instance_count\":\"1\",\"avg_elapsed_ms\":\"860\",\"p95_elapsed_ms\":\"1420\",\"elapsed_ms\":\"860\",\"message\":\"Traffic saturation sample\",\"service_name\":\"subway-demo\"}" \
+    -d "{\"@timestamp\":\"$timestamp\",\"event_type\":\"TRAFFIC\",\"event_name\":\"golden_signals_summary\",\"success\":\"true\",\"endpoint\":\"/api/v1/stations/arrivals/all\",\"request_count\":\"$request_count\",\"requests_per_second\":\"$requests_per_second\",\"cpu_percent\":\"$cpu_percent\",\"memory_percent\":\"$memory_percent\",\"queue_depth\":\"$queue_depth\",\"instance_count\":\"1\",\"avg_elapsed_ms\":\"$avg_ms\",\"p95_elapsed_ms\":\"$p95_ms\",\"elapsed_ms\":\"$avg_ms\",\"message\":\"Traffic saturation sample\",\"service_name\":\"subway-demo\"}" \
     >/dev/null
 }
 
 add_metric_event() {
+  local fetched="${1:-2999}"
   local timestamp
   timestamp="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   curl -fsS -X POST "$ES_URL/$DEMO_INDEX/_doc?refresh=true" \
     -H 'Content-Type: application/json' \
-    -d "{\"@timestamp\":\"$timestamp\",\"event_type\":\"METRIC_COLLECTION\",\"success\":\"true\",\"duration_ms\":\"340\",\"up_count\":\"310\",\"down_count\":\"270\",\"fetched_total\":\"2999\",\"line1_saved\":\"580\",\"time_category\":\"RUSH_HOUR\",\"day_of_week\":\"MONDAY\",\"hour_of_day\":\"18\",\"message\":\"Synthetic demo metric\",\"service_name\":\"subway-demo\"}" \
+    -d "{\"@timestamp\":\"$timestamp\",\"event_type\":\"METRIC_COLLECTION\",\"success\":\"true\",\"duration_ms\":\"340\",\"up_count\":\"310\",\"down_count\":\"270\",\"fetched_total\":\"$fetched\",\"line1_saved\":\"580\",\"time_category\":\"RUSH_HOUR\",\"day_of_week\":\"MONDAY\",\"hour_of_day\":\"18\",\"message\":\"Synthetic demo metric\",\"service_name\":\"subway-demo\"}" \
     >/dev/null
 }
 
@@ -155,21 +166,30 @@ reset_demo_index() {
   curl -fsS -X DELETE "$ES_URL/$DEMO_INDEX" >/dev/null 2>&1 || true
 }
 
+# AI 서비스 컨테이너와 같은 이미지·환경변수(LLM 설정 포함)로 일회성 분석을 돌린다.
+# 정기 분석 컨테이너와 별개라, 시연 중에는 scripts/demo.sh가 정기 분석을 잠시 멈춘다.
 run_analysis() {
   local input_pattern="$1"
+  shift
+  local extra=()
+  local kv
+  for kv in "$@"; do
+    extra+=(-e "$kv")
+  done
   (
-    cd "$AI_DIR"
-    ELASTICSEARCH_URL="$ES_URL" \
-    LOG_INDEX_PATTERN="$input_pattern" \
-    ANOMALY_INDEX="$RESULT_INDEX" \
-    REMEDIATION_INDEX="$ACTION_INDEX" \
-    LOOKBACK_MINUTES=30 \
-    ANALYSIS_MODE=rules \
-    ANOMALY_CONSECUTIVE_N=1 \
-    REMEDIATION_COOLDOWN_MINUTES="${DEMO_COOLDOWN_MINUTES:-0}" \
-      "$PYTHON_BIN" -c 'from main import run_once; run_once()'
+    cd "$ROOT_DIR"
+    docker compose -f docker-compose.yml -f docker-compose.scale.yml run --rm --no-deps \
+      -e LOG_INDEX_PATTERN="$input_pattern" \
+      ${extra[@]+"${extra[@]}"} \
+      ai_model python -c 'import logging; logging.basicConfig(level="INFO", format="%(asctime)s %(levelname)s [%(name)s] %(message)s"); from main import run_once; run_once()' 2>&1 \
+      | grep -E "분석 완료|검증 패널:|진단 완료|제안 생성" | sed -E 's/^[0-9-]+ ([0-9:]+),[0-9]+ INFO \[[a-z-]+\] /  \1 /' || true
   )
   curl -fsS -X POST "$ES_URL/$RESULT_INDEX/_refresh" >/dev/null
+}
+
+run_scenario_analysis() {
+  run_analysis "$DEMO_INDEX" LOOKBACK_MINUTES=30 ANOMALY_CONSECUTIVE_N=1 \
+    REMEDIATION_ENABLED="${DEMO_REMEDIATION_ENABLED:-false}" REMEDIATION_COOLDOWN_MINUTES=0
 }
 
 # 이번 시나리오로 만들어진 자동 대응 제안을 출력한다.
@@ -209,7 +229,7 @@ case "$SCENARIO" in
     done
     put_scheduler_event "true" "정상 수집 완료"
     add_metric_event
-    run_analysis "$DEMO_INDEX"
+    run_scenario_analysis
     echo "Demo published: 정상"
     ;;
   api-failure)
@@ -223,7 +243,7 @@ case "$SCENARIO" in
     put_api_event "false" "380" "429" "RATE_LIMITED" "호출 한도 초과 응답"
     put_scheduler_event "true" "수집 작업은 완료됐으나 API 일부 실패"
     add_metric_event
-    run_analysis "$DEMO_INDEX"
+    run_scenario_analysis
     echo "Demo published: 위험 (API 오류율 30%)"
     ;;
   traffic-spike)
@@ -233,13 +253,55 @@ case "$SCENARIO" in
       put_api_event "true" "140" "200" "NONE" "정상 응답"
     done
     put_scheduler_event "true" "정상 수집 완료"
-    put_traffic_event "280" "460" "72" "68" "34" "10"
-    put_traffic_event "410" "720" "88" "79" "121" "5"
-    put_traffic_event "560" "970" "96" "86" "318" "0"
+    # 요청량만 기준선(약 3 req/s)의 4~6배. 자원·응답시간은 정상이라 트래픽 신호만 뜬다.
+    put_traffic_event "2400" "12.0" "31" "52" "6" "10" "45" "92"
+    put_traffic_event "3300" "16.5" "34" "53" "8" "5" "46" "94"
+    put_traffic_event "3600" "18.0" "35" "54" "9" "0" "47" "95"
     add_metric_event
-    run_analysis "$DEMO_INDEX"
-    echo "Demo published: 위험 (트래픽 급증 / 수평 확장 권고)"
-    show_proposed_action
+    run_scenario_analysis
+    echo "Demo published: 트래픽 급증"
+    ;;
+  saturation)
+    reset_demo_index
+    seed_baseline
+    for _ in {1..10}; do
+      put_api_event "true" "104" "200" "NONE" "정상 응답"
+    done
+    put_scheduler_event "true" "정상 수집 완료"
+    # 요청량·응답시간은 평소 수준, CPU만 85~93%로 포화.
+    put_traffic_event "560" "2.8" "85" "58" "12" "10" "46" "93"
+    put_traffic_event "580" "2.9" "91" "59" "14" "5" "47" "95"
+    put_traffic_event "570" "2.9" "93" "59" "15" "0" "47" "96"
+    add_metric_event
+    run_scenario_analysis
+    echo "Demo published: 자원 포화"
+    ;;
+  latency)
+    reset_demo_index
+    seed_baseline
+    for _ in {1..10}; do
+      put_api_event "true" "104" "200" "NONE" "정상 응답"
+    done
+    put_scheduler_event "true" "정상 수집 완료"
+    # 요청량·자원은 정상, p95 응답시간만 기준선(약 90ms)의 10배 이상.
+    put_traffic_event "560" "2.8" "30" "54" "20" "10" "620" "1100"
+    put_traffic_event "570" "2.9" "31" "55" "24" "5" "700" "1250"
+    put_traffic_event "560" "2.8" "32" "55" "26" "0" "760" "1380"
+    add_metric_event
+    run_scenario_analysis
+    echo "Demo published: 응답시간 급증"
+    ;;
+  collection-drop)
+    reset_demo_index
+    seed_baseline
+    for _ in {1..10}; do
+      put_api_event "true" "104" "200" "NONE" "정상 응답"
+    done
+    put_scheduler_event "true" "정상 수집 완료"
+    # 수집은 성공했지만 받아온 도착정보가 기준선(약 2,900건)의 30% 수준.
+    add_metric_event "870"
+    run_scenario_analysis
+    echo "Demo published: 수집량 급감"
     ;;
   scheduler-failure)
     reset_demo_index
@@ -249,11 +311,11 @@ case "$SCENARIO" in
     done
     put_scheduler_event "false" "서울 API 연결 타임아웃으로 수집 배치 중단"
     add_metric_event
-    run_analysis "$DEMO_INDEX"
+    run_scenario_analysis
     echo "Demo published: 위험 (스케줄러 장애)"
     ;;
   restore)
-    run_analysis "${LIVE_LOG_INDEX_PATTERN:-subway-logs-*}"
+    run_analysis "${LIVE_LOG_INDEX_PATTERN:-subway-logs-*}" REMEDIATION_ENABLED=false
     reset_demo_index
     echo "Dashboard restored to live log analysis."
     ;;
