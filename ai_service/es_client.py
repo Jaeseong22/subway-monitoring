@@ -45,6 +45,9 @@ class ElasticsearchClient:
                 "event_type",
                 "success",
                 "elapsed_ms",
+                # 골든시그널 요약의 응답시간. 빠지면 창 응답시간이 항상 0이 되어 latency를 탐지하지 못한다.
+                "avg_elapsed_ms",
+                "p95_elapsed_ms",
                 "duration_ms",
                 "error_msg",
                 "error_code",
