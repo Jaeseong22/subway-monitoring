@@ -6,14 +6,14 @@ set -euo pipefail
 #
 # Usage:
 #   scripts/demo.sh up           시연 모드로 기동 + 이전 조치 정리 + 워커·시뮬레이터 시작
-#   scripts/demo.sh spike [분]   실제 백엔드에 약 10배 요청을 보낸다 (기본 8분, 75초 뒤 즉시 분석)
+#   scripts/demo.sh spike [분]   실제 백엔드에 약 10배 요청을 보낸다 (기본 8분, 급증이 지표에 잡히는 즉시 분석)
 #   scripts/demo.sh anomaly <종류>  이상 종류별 시연 (정기 분석을 멈추고 결과를 고정)
 #                                traffic-spike | saturation | latency | api-failure |
 #                                scheduler-failure | collection-drop
 #   scripts/demo.sh restore      종류별 시연을 끝내고 실제 로그 분석으로 복귀
 #   scripts/demo.sh analyze      지금 바로 분석 한 번 실행
 #   scripts/demo.sh status       서버 대수, 최근 분석, 최근 조치
-#   scripts/demo.sh reset        열려 있는 조치(승인 대기 등)를 만료 처리
+#   scripts/demo.sh reset        다음 관람객용 초기화: 급증 중지, 열린 조치 만료, backend 1대
 #   scripts/demo.sh normal       워커·시뮬레이터를 끄고 평소 설정·1대로 복귀
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -24,6 +24,7 @@ fi
 
 ES_URL="${ELASTICSEARCH_URL:-http://localhost:9200}"
 BACKEND_URL="${BACKEND_URL:-http://localhost:8080}"
+KIBANA_URL="${KIBANA_URL:-http://localhost:5601}"
 ACTION_INDEX="${REMEDIATION_INDEX:-subway-remediation-actions}"
 LOG_DIR="$ROOT_DIR/logs"
 WORKER_PID="$LOG_DIR/demo_worker.pid"
@@ -69,6 +70,15 @@ reset_actions() {
     || echo "조치 인덱스가 아직 없습니다 (정리할 것 없음)"
 }
 
+# 급증 폭과 서버별 요청 분산을 보여주는 Kibana 대시보드(kibana/demo-dashboard.ndjson).
+# 골든시그널 숫자 필드는 문자열로 색인돼 있어, 데이터 뷰의 런타임 필드(*_num)로 숫자로 바꿔 그린다.
+import_kibana_dashboard() {
+  curl -fsS -XPOST "$KIBANA_URL/api/saved_objects/_import?overwrite=true" -H 'kbn-xsrf: true' \
+    --form file=@kibana/demo-dashboard.ndjson >/dev/null \
+    && echo "Kibana 시연 대시보드를 불러왔습니다." \
+    || echo "Kibana 대시보드를 불러오지 못했습니다 ($KIBANA_URL)" >&2
+}
+
 cmd_up() {
   docker compose "${DEMO_FILES[@]}" up -d --scale backend=1
   wait_backend
@@ -88,7 +98,9 @@ cmd_up() {
     nohup scripts/traffic_simulator.sh >> "$LOG_DIR/demo_simulator.log" 2>&1 &
     echo $! > "$SIM_PID"
   fi
+  import_kibana_dashboard
   echo "시연 모드: 분석 1분 주기, 확장 후 ${DEMO_VERIFY_AFTER_MINUTES}분 뒤 검증"
+  echo "그래프: ${KIBANA_URL}/app/dashboards#/view/demo-traffic-scale"
   echo "워커 로그: logs/demo_worker.log  /  급증 주입: scripts/demo.sh spike"
 }
 
@@ -103,12 +115,45 @@ cmd_spike() {
     nohup scripts/traffic_simulator.sh >> "$LOG_DIR/demo_spike.log" 2>&1 &
   local pid=$!
   echo "$pid" > "$SPIKE_PID"
-  (sleep "$((minutes * 60))"; kill "$pid" 2>/dev/null; rm -f "$SPIKE_PID") >/dev/null 2>&1 &
+  # reset 뒤 새 급증을 넣었을 수 있으므로 자기 PID가 적힌 경우에만 파일을 지운다.
+  (sleep "$((minutes * 60))"; kill "$pid" 2>/dev/null
+   [[ "$(cat "$SPIKE_PID" 2>/dev/null)" == "$pid" ]] && rm -f "$SPIKE_PID") >/dev/null 2>&1 &
+  local started
+  started="$(date -u '+%Y-%m-%dT%H:%M:%S')"
   echo "$(date '+%H:%M:%S') 급증 시작 (${minutes}분간)"
-  # 골든시그널은 서버마다 60초에 한 번 기록된다. 급증이 반영된 기록이 쌓일 시간을 두고
-  # 정기 주기를 기다리지 않고 바로 분석한다.
-  (sleep 75; analyze_now) >> "$LOG_DIR/demo_analyze.log" 2>&1 &
-  echo "75초 뒤 즉시 분석합니다. 진행은 scripts/demo.sh status 로 확인하세요."
+  # 시연 모드에서 골든시그널은 5초마다 남는다. 급증이 담긴 첫 기록이 들어오는 즉시
+  # 분석한다(정기 1분 주기를 기다리지 않는다). 보통 5초 안에 시작한다.
+  wait_spike_recorded "$started"
+  echo "$(date '+%H:%M:%S') 분석 시작 — 확장 제안까지 기다리세요 (scripts/demo.sh status)"
+  analyze_now >> "$LOG_DIR/demo_analyze.log" 2>&1 &
+}
+
+# 급증 시작 이후 기록된 골든시그널 중 인스턴스당 초당 요청이 평소(약 1.2)보다 확실히 높은 것이
+# 나타날 때까지 0.5초 간격으로 확인한다. 10초가 지나도 없으면 그냥 분석한다.
+wait_spike_recorded() {
+  local since="$1"
+  python3 - "$ES_URL" "$since" <<'PY'
+import json, sys, time, urllib.request
+es, since = sys.argv[1], sys.argv[2]
+query = {"size": 0, "query": {"bool": {"filter": [
+    {"term": {"event_name.keyword": "golden_signals_summary"}},
+    {"term": {"instance_role.keyword": "api"}},
+    {"range": {"@timestamp": {"gt": since}}},
+    {"script": {"script": "def v = doc['requests_per_second.keyword']; "
+                          "return v.size() > 0 && Double.parseDouble(v.value) >= 4.0"}}]}}}
+deadline = time.time() + 10
+while time.time() < deadline:
+    req = urllib.request.Request(f"{es}/subway-logs-*/_search", data=json.dumps(query).encode(),
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            if json.load(resp)["hits"]["total"]["value"] > 0:
+                sys.exit(0)
+    except Exception:
+        pass
+    time.sleep(0.5)
+print("급증 기록을 10초 안에 찾지 못했습니다. 그대로 분석합니다.", file=sys.stderr)
+PY
 }
 
 analyze_now() {
@@ -152,6 +197,15 @@ for h in json.load(sys.stdin)["hits"]["hits"]:
 ' || echo "(조치 없음)"
 }
 
+# 관람객마다 한 바퀴를 돌고 처음 상태로 되돌린다. 열린 조치를 만료해 두면 쿨다운에도
+# 걸리지 않으므로(만료·거부된 조치는 쿨다운 계산에서 빠진다) 바로 다음 급증을 넣을 수 있다.
+cmd_reset() {
+  stop_pid "$SPIKE_PID"
+  reset_actions
+  docker compose "${DEMO_FILES[@]}" up -d --no-recreate --scale backend=1 backend >/dev/null 2>&1
+  echo "초기화 완료: backend $(docker ps --format '{{.Names}}' | grep -c 'backend')대"
+}
+
 cmd_normal() {
   stop_pid "$SPIKE_PID"
   stop_pid "$SIM_PID"
@@ -169,7 +223,7 @@ case "${1:-}" in
   restore) cmd_restore ;;
   analyze) analyze_now ;;
   status) cmd_status ;;
-  reset) reset_actions ;;
+  reset) cmd_reset ;;
   normal) cmd_normal ;;
   *) sed -n '4,17p' "$0"; exit 1 ;;
 esac
