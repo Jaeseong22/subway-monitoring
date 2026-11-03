@@ -100,6 +100,28 @@ def refresh_analysis() -> bool:
     return True
 
 
+def verify_early(client: "ElasticsearchClient", action: dict) -> bool:
+    """검증 대기 시간 전이라도, 실행 이후 분석에서 효과가 확인되면 바로 성공 처리한다.
+
+    시연에서는 확장 → 정상 복귀 → 축소까지 몇십 초 안에 보여줘야 하는데, 고정 대기(분 단위)
+    동안 확장 조치가 열린 채로 남아 축소 제안을 막았다. 여기서는 성공만 앞당기고 실패
+    판정은 하지 않는다(대기 시간이 지난 뒤 원래 경로가 판정한다). 성공하면 분석을 한 번 더
+    돌려 다음 조치(정상 유지 시 축소)가 곧바로 제안되게 한다.
+    """
+    latest = latest_result(client)
+    if not latest or not remediation.analysis_is_post_execution(action, latest):
+        return False
+    verdict = remediation.verify(action, latest["result"])
+    if verdict["status"] != remediation.SUCCEEDED:
+        return False
+    action_id = action.get("action_id")
+    client.update_action(action_id, remediation.with_status(
+        action, verdict["status"], verdict["note"]))
+    LOGGER.info("조기 검증 id=%s → %s (%s)", action_id, verdict["status"], verdict["note"])
+    refresh_analysis()
+    return True
+
+
 def process_once(client: "ElasticsearchClient", cfg: dict, dry_run: bool) -> int:
     """열려 있는 조치들을 한 번 훑는다. 처리한 건수를 반환한다."""
     handled = 0
@@ -149,6 +171,9 @@ def process_once(client: "ElasticsearchClient", cfg: dict, dry_run: bool) -> int
                 new_status, note = reaped
                 client.update_action(action_id, remediation.with_status(action, new_status, note))
                 LOGGER.warning("멈춘 조치 정리 id=%s → %s (%s)", action_id, new_status, note)
+                handled += 1
+                continue
+            if cfg.get("verify_early") and not dry_run and verify_early(client, action):
                 handled += 1
                 continue
             if not remediation.is_ready_to_verify(action, cfg=cfg):

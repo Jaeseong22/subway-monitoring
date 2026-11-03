@@ -187,6 +187,35 @@ class WorkerVerifyFreshnessTest(unittest.TestCase):
         self.assertEqual(called, [])
         self.assertEqual(client.updates["a1"]["status"], remediation.SUCCEEDED)
 
+    def test_verify_early_succeeds_before_wait_and_reanalyzes(self):
+        just_executed = dict(self.executed(), executed_at=ago(1))
+        fresh = {"result": {"detected_keys": [], "overall_status": "정상"},
+                 "metrics": {}, "diagnosis": None, "generated_at": ago(0)}
+        client = FakeClient([just_executed], latest=fresh)
+        called = []
+        worker.refresh_analysis = lambda: called.append(1) or True
+        worker.process_once(client, cfg(verify_early=True), dry_run=False)
+        self.assertEqual(client.updates["a1"]["status"], remediation.SUCCEEDED)
+        self.assertEqual(called, [1])  # 다음 조치(축소)를 위해 분석을 다시 돌린다
+
+    def test_verify_early_never_fails_before_wait(self):
+        just_executed = dict(self.executed(), executed_at=ago(1))
+        still = {"result": {"detected_keys": ["traffic"], "overall_status": "위험"},
+                 "metrics": {}, "diagnosis": None, "generated_at": ago(0)}
+        client = FakeClient([just_executed], latest=still)
+        worker.refresh_analysis = lambda: True
+        worker.process_once(client, cfg(verify_early=True), dry_run=False)
+        self.assertNotIn("a1", client.updates)  # 대기 시간 전에는 실패로 판정하지 않는다
+        self.assertEqual(client.saved, [])
+
+    def test_verify_early_off_waits(self):
+        just_executed = dict(self.executed(), executed_at=ago(1))
+        fresh = {"result": {"detected_keys": [], "overall_status": "정상"},
+                 "metrics": {}, "diagnosis": None, "generated_at": ago(0)}
+        client = FakeClient([just_executed], latest=fresh)
+        worker.process_once(client, cfg(), dry_run=False)
+        self.assertNotIn("a1", client.updates)
+
     def test_analysis_is_post_execution(self):
         action = {"executed_at": ago(10)}
         self.assertTrue(remediation.analysis_is_post_execution(action, {"generated_at": ago(5)}))
