@@ -6,7 +6,7 @@ set -euo pipefail
 #
 # Usage:
 #   scripts/demo.sh up           시연 모드로 기동 + 이전 조치 정리 + 워커·시뮬레이터 시작
-#   scripts/demo.sh spike [분]   실제 백엔드에 약 10배 요청을 보낸다 (기본 8분, 급증이 지표에 잡히는 즉시 분석)
+#   scripts/demo.sh spike [분]   실제 백엔드에 약 10배 요청을 보낸다 (기본 1분, 급증이 지표에 잡히는 즉시 분석)
 #   scripts/demo.sh anomaly <종류>  이상 종류별 시연 (정기 분석을 멈추고 결과를 고정)
 #                                traffic-spike | saturation | latency | api-failure |
 #                                scheduler-failure | collection-drop
@@ -87,7 +87,8 @@ cmd_up() {
   if ! running "$WORKER_PID"; then
     REMEDIATION_EXECUTE=true \
     REMEDIATION_VERIFY_AFTER_MINUTES="$DEMO_VERIFY_AFTER_MINUTES" \
-    REMEDIATION_POLL_SECONDS=10 \
+    REMEDIATION_POLL_SECONDS=3 \
+    REMEDIATION_VERIFY_EARLY=true \
     REMEDIATION_COMPOSE_FILES=docker-compose.yml,docker-compose.scale.yml,docker-compose.demo.yml \
     ELASTICSEARCH_URL="$ES_URL" \
       nohup ai_service/.venv/bin/python ai_service/remediation_worker.py \
@@ -105,7 +106,7 @@ cmd_up() {
 }
 
 cmd_spike() {
-  local minutes="${1:-8}"
+  local minutes="${1:-1}"
   if running "$SPIKE_PID"; then
     echo "이미 급증 주입 중입니다." >&2
     exit 1
@@ -115,9 +116,14 @@ cmd_spike() {
     nohup scripts/traffic_simulator.sh >> "$LOG_DIR/demo_spike.log" 2>&1 &
   local pid=$!
   echo "$pid" > "$SPIKE_PID"
-  # reset 뒤 새 급증을 넣었을 수 있으므로 자기 PID가 적힌 경우에만 파일을 지운다.
-  (sleep "$((minutes * 60))"; kill "$pid" 2>/dev/null
-   [[ "$(cat "$SPIKE_PID" 2>/dev/null)" == "$pid" ]] && rm -f "$SPIKE_PID") >/dev/null 2>&1 &
+  # 급증이 끝나면 분석 구간에서 급증 기록이 빠지는 즉시 분석한다. 워커가 그 결과로 확장을
+  # 성공 처리하고 다시 분석하면, 서버가 2대인 채 정상이므로 축소가 제안된다.
+  # reset으로 이미 멈췄거나 새 급증이 시작됐으면(PID 파일이 다르면) 아무것도 하지 않는다.
+  (sleep "$((minutes * 60))"
+   [[ "$(cat "$SPIKE_PID" 2>/dev/null)" == "$pid" ]] || exit 0
+   kill "$pid" 2>/dev/null; rm -f "$SPIKE_PID"
+   wait_spike_cleared
+   analyze_now) >> "$LOG_DIR/demo_analyze.log" 2>&1 &
   local started
   started="$(date -u '+%Y-%m-%dT%H:%M:%S')"
   echo "$(date '+%H:%M:%S') 급증 시작 (${minutes}분간)"
@@ -128,8 +134,9 @@ cmd_spike() {
   analyze_now >> "$LOG_DIR/demo_analyze.log" 2>&1 &
 }
 
-# 급증 시작 이후 기록된 골든시그널 중 인스턴스당 초당 요청이 평소(약 1.2)보다 확실히 높은 것이
-# 나타날 때까지 0.5초 간격으로 확인한다. 10초가 지나도 없으면 그냥 분석한다.
+# 급증 시작 이후 기록된 골든시그널 중 인스턴스당 초당 요청이 8 이상(5초 창에 급증이 3초 넘게
+# 담긴 것)인 기록이 나타날 때까지 0.5초 간격으로 확인한다. 이보다 약한 첫 기록으로 분석하면
+# 30초 분석 구간 평균에 묻혀 놓친다. 10초가 지나도 없으면 그냥 분석한다.
 wait_spike_recorded() {
   local since="$1"
   python3 - "$ES_URL" "$since" <<'PY'
@@ -140,7 +147,7 @@ query = {"size": 0, "query": {"bool": {"filter": [
     {"term": {"instance_role.keyword": "api"}},
     {"range": {"@timestamp": {"gt": since}}},
     {"script": {"script": "def v = doc['requests_per_second.keyword']; "
-                          "return v.size() > 0 && Double.parseDouble(v.value) >= 4.0"}}]}}}
+                          "return v.size() > 0 && Double.parseDouble(v.value) >= 8.0"}}]}}}
 deadline = time.time() + 10
 while time.time() < deadline:
     req = urllib.request.Request(f"{es}/subway-logs-*/_search", data=json.dumps(query).encode(),
@@ -153,6 +160,33 @@ while time.time() < deadline:
         pass
     time.sleep(0.5)
 print("급증 기록을 10초 안에 찾지 못했습니다. 그대로 분석합니다.", file=sys.stderr)
+PY
+}
+
+# 최근 33초(분석 구간 30초 + 여유) 안에 급증 수준의 골든시그널이 하나도 없을 때까지 기다린다.
+# 50초가 지나면 그냥 진행한다.
+wait_spike_cleared() {
+  python3 - "$ES_URL" <<'PY'
+import json, sys, time, urllib.request
+es = sys.argv[1]
+query = {"size": 0, "query": {"bool": {"filter": [
+    {"term": {"event_name.keyword": "golden_signals_summary"}},
+    {"term": {"instance_role.keyword": "api"}},
+    {"range": {"@timestamp": {"gte": "now-33s"}}},
+    {"script": {"script": "def v = doc['requests_per_second.keyword']; "
+                          "return v.size() > 0 && Double.parseDouble(v.value) >= 4.0"}}]}}}
+deadline = time.time() + 50
+time.sleep(5)  # 급증이 멈춘 뒤 마지막 급증 기록이 색인될 시간
+while time.time() < deadline:
+    req = urllib.request.Request(f"{es}/subway-logs-*/_search", data=json.dumps(query).encode(),
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            if json.load(resp)["hits"]["total"]["value"] == 0:
+                sys.exit(0)
+    except Exception:
+        pass
+    time.sleep(0.5)
 PY
 }
 
@@ -218,7 +252,7 @@ cmd_normal() {
 
 case "${1:-}" in
   up) cmd_up ;;
-  spike) cmd_spike "${2:-8}" ;;
+  spike) cmd_spike "${2:-1}" ;;
   anomaly) cmd_anomaly "${2:-}" ;;
   restore) cmd_restore ;;
   analyze) analyze_now ;;
