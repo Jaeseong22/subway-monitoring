@@ -86,6 +86,23 @@ def config() -> dict[str, Any]:
     }
 
 
+def client_options() -> dict[str, Any]:
+    """OpenAI 클라이언트의 요청 제한 시간과 SDK 자체 재시도 횟수.
+
+    SDK는 기본으로 503·연결 오류를 몇 번 재시도하고 응답을 오래 기다린다. 시연에서는
+    공급자가 막혔을 때 분석 한 번이 2분 넘게 멈췄다. 시연 모드에서만 짧게 끊고 통계
+    결과로 넘어가도록, 환경변수가 있을 때만 값을 넘긴다(없으면 SDK 기본값 그대로).
+    """
+    options: dict[str, Any] = {}
+    timeout = os.getenv("LLM_TIMEOUT_SECONDS")
+    if timeout:
+        options["timeout"] = float(timeout)
+    retries = os.getenv("LLM_CLIENT_MAX_RETRIES")
+    if retries:
+        options["max_retries"] = int(retries)
+    return options
+
+
 def call_with_retry(fn: Callable[[], T], *, what: str = "LLM 호출",
                     cfg: dict[str, Any] | None = None,
                     sleep: Callable[[float], None] = time.sleep) -> T:

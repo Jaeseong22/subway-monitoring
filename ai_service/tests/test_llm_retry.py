@@ -149,5 +149,27 @@ class DailyQuotaTest(unittest.TestCase):
         self.assertEqual(calls["n"], 1)   # 재시도 안 함
         self.assertEqual(slept, [])       # 기다리지 않음
 
+
+class ClientOptionsTest(unittest.TestCase):
+
+    def setUp(self):
+        self._saved = {k: os.environ.pop(k, None)
+                       for k in ("LLM_TIMEOUT_SECONDS", "LLM_CLIENT_MAX_RETRIES")}
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+
+    def test_unset_keeps_sdk_defaults(self):
+        self.assertEqual(llm_retry.client_options(), {})
+
+    def test_demo_values_are_passed(self):
+        os.environ["LLM_TIMEOUT_SECONDS"] = "8"
+        os.environ["LLM_CLIENT_MAX_RETRIES"] = "0"
+        self.assertEqual(llm_retry.client_options(), {"timeout": 8.0, "max_retries": 0})
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

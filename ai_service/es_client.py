@@ -20,12 +20,12 @@ class ElasticsearchClient:
         self.action_index = os.getenv("REMEDIATION_INDEX", "subway-remediation-actions")
         self.client = Elasticsearch(self.url, request_timeout=30)
 
-    def _window(self, lookback_minutes: int) -> AnalysisWindow:
+    def _window(self, lookback_minutes: float) -> AnalysisWindow:
         end = datetime.now(timezone.utc)
         start = end - timedelta(minutes=lookback_minutes)
         return AnalysisWindow(start=start, end=end)
 
-    def fetch_recent_events(self, lookback_minutes: int) -> tuple[AnalysisWindow, list[dict[str, Any]]]:
+    def fetch_recent_events(self, lookback_minutes: float) -> tuple[AnalysisWindow, list[dict[str, Any]]]:
         window = self._window(lookback_minutes)
         resp = self.client.search(
             index=self.log_index_pattern,

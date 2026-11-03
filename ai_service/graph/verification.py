@@ -175,7 +175,8 @@ def make_openai_caller(model: str | None = None, temperature: float = 0.0) -> Le
 
     llm = ChatOpenAI(model=model or os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
                      temperature=temperature,
-                     model_kwargs={"response_format": {"type": "json_object"}})
+                     model_kwargs={"response_format": {"type": "json_object"}},
+                     **llm_retry.client_options())
 
     def _caller(system: str, user: str) -> dict[str, Any]:
         # 심사관 3명을 연속으로 부르므로 무료 티어의 분당 제한에 걸리기 쉽다.

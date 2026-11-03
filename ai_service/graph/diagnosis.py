@@ -210,7 +210,8 @@ def make_openai_caller(model: str | None = None, temperature: float = 0.1) -> Ll
     from graph import llm_retry
 
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"),
-                    base_url=os.getenv("OPENAI_API_BASE") or None)
+                    base_url=os.getenv("OPENAI_API_BASE") or None,
+                    **llm_retry.client_options())
     model_name = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
     def _caller(messages: list[dict[str, Any]], schemas: list[dict[str, Any]]) -> dict[str, Any]:

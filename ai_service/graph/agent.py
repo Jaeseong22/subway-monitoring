@@ -75,7 +75,8 @@ def _is_off_hours(now: datetime) -> bool:
 
 
 def fetch_metrics(state: GraphState) -> GraphState:
-    lookback = int(os.getenv("LOOKBACK_MINUTES", "30"))
+    # 시연에서는 5초 주기 지표 몇 개만 보도록 0.2분(12초)처럼 소수를 쓴다.
+    lookback = float(os.getenv("LOOKBACK_MINUTES", "30"))
     now_local = datetime.now()
     off_hours = _is_off_hours(now_local)
 
@@ -281,6 +282,7 @@ def analyze_with_llm(state: GraphState) -> GraphState:
         model=model_name,
         temperature=0.2,
         model_kwargs={"response_format": {"type": "json_object"}},
+        **llm_retry.client_options(),
     )
     prompt = build_anomaly_prompt(context)
     try:
@@ -454,6 +456,12 @@ def propose_remediation(state: GraphState) -> GraphState:
 
     try:
         client = ElasticsearchClient()
+        # 열린 조치 확인은 분석 시작 때 한 번 했지만, LLM 단계가 수십 초 걸리는 사이에
+        # 다른 분석(시연의 즉시 분석과 정기 분석)이 먼저 제안을 저장했을 수 있다.
+        # 저장 직전에 다시 확인해 같은 급증에 확장 제안이 두 건 생기지 않게 한다.
+        if remediation.has_open_action(client.fetch_recent_actions()):
+            LOGGER.info("다른 분석이 먼저 조치를 제안해 이번 제안은 저장하지 않습니다.")
+            return {"proposed_action_id": None}
         action_id = client.save_action(action)
     except Exception as exc:
         LOGGER.error("자동 대응 제안 저장 실패: %s", exc)
