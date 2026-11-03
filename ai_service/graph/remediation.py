@@ -56,6 +56,8 @@ def config() -> dict[str, Any]:
         "min_replicas": _int("REMEDIATION_MIN_REPLICAS", "1"),
         "cooldown_minutes": _int("REMEDIATION_COOLDOWN_MINUTES", "15"),
         "verify_after_minutes": _int("REMEDIATION_VERIFY_AFTER_MINUTES", "10"),
+        # 시연용: 대기 시간 전이라도 실행 이후 분석에서 촉발 신호가 사라졌으면 바로 성공 처리한다.
+        "verify_early": _bool("REMEDIATION_VERIFY_EARLY", "false"),
         "expire_after_minutes": _int("REMEDIATION_EXPIRE_AFTER_MINUTES", "60"),
         # 실행이 이 시간 내에 EXECUTED로 넘어가지 않으면 워커 중단으로 보고 정리한다.
         # (execute의 subprocess timeout은 300초이므로 정상이면 훨씬 빨리 넘어간다.)

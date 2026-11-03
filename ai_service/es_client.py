@@ -20,12 +20,12 @@ class ElasticsearchClient:
         self.action_index = os.getenv("REMEDIATION_INDEX", "subway-remediation-actions")
         self.client = Elasticsearch(self.url, request_timeout=30)
 
-    def _window(self, lookback_minutes: int) -> AnalysisWindow:
+    def _window(self, lookback_minutes: float) -> AnalysisWindow:
         end = datetime.now(timezone.utc)
         start = end - timedelta(minutes=lookback_minutes)
         return AnalysisWindow(start=start, end=end)
 
-    def fetch_recent_events(self, lookback_minutes: int) -> tuple[AnalysisWindow, list[dict[str, Any]]]:
+    def fetch_recent_events(self, lookback_minutes: float) -> tuple[AnalysisWindow, list[dict[str, Any]]]:
         window = self._window(lookback_minutes)
         resp = self.client.search(
             index=self.log_index_pattern,
@@ -108,6 +108,14 @@ class ElasticsearchClient:
                                             "filter": [
                                                 {"term": {"event_type.keyword": "TRAFFIC"}},
                                                 {"term": {"event_name.keyword": "golden_signals_summary"}},
+                                                # 평소(60초) 지표만 기준선에 쓴다. 시연 모드는 5초마다 남기므로
+                                                # 급증 1분이 표본 12개로 들어가 같은 시간대 기준선의 흔들림 폭을
+                                                # 키웠고, 리허설을 반복하자 급증이 z≥2를 넘지 못했다. 기동 직후의
+                                                # 1초짜리 부분 집계도 함께 빠진다.
+                                                {"script": {"script": {
+                                                    "source": "def v = doc['window_seconds.keyword']; "
+                                                              "return v.size() == 0 || Double.parseDouble(v.value) >= 30",
+                                                }}},
                                             ]
                                         }
                                     },

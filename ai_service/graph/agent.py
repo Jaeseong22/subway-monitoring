@@ -2,6 +2,8 @@ import json
 import logging
 import os
 from datetime import datetime, time, timedelta, timezone
+from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from typing import Any, TypedDict
 
 from langchain_openai import ChatOpenAI
@@ -20,6 +22,7 @@ from prompts.anomaly_prompt import build_anomaly_prompt
 
 
 LOGGER = logging.getLogger("ai-service")
+_SUMMARY_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="llm-summary")
 
 
 class GraphState(TypedDict, total=False):
@@ -34,6 +37,7 @@ class GraphState(TypedDict, total=False):
     diagnosis: dict[str, Any] | None      # 근본 원인 진단 산출물
     result_index: str
     proposed_action_id: str | None
+    summary_future: Future | None         # 동시에 도는 LLM 요약 (저장 직전에 합친다)
 
 
 def _to_int(value: Any) -> int:
@@ -75,7 +79,8 @@ def _is_off_hours(now: datetime) -> bool:
 
 
 def fetch_metrics(state: GraphState) -> GraphState:
-    lookback = int(os.getenv("LOOKBACK_MINUTES", "30"))
+    # 시연에서는 5초 주기 지표 몇 개만 보도록 0.2분(12초)처럼 소수를 쓴다.
+    lookback = float(os.getenv("LOOKBACK_MINUTES", "30"))
     now_local = datetime.now()
     off_hours = _is_off_hours(now_local)
 
@@ -281,20 +286,49 @@ def analyze_with_llm(state: GraphState) -> GraphState:
         model=model_name,
         temperature=0.2,
         model_kwargs={"response_format": {"type": "json_object"}},
+        **llm_retry.client_options(),
     )
     prompt = build_anomaly_prompt(context)
+    # 요약은 대시보드 문장만 바꾸고 판정에는 쓰이지 않는다. 그래서 검증 패널·진단과 동시에
+    # 돌리고 저장 직전(store_result)에 합친다. 순서대로 부르면 요약 한 번(최대 수십 초)만큼
+    # 확장 제안이 늦어졌다.
+    future = _SUMMARY_POOL.submit(_summarize, llm, prompt)
+    return {"result": grounded, "summary_future": future}
+
+
+def _summarize(llm: Any, prompt: Any) -> dict[str, Any]:
+    response = llm_retry.call_with_retry(lambda: llm.invoke(prompt), what="분석 요약")
+    content = response.content if hasattr(response, "content") else str(response)
+    return json.loads(_strip_code_fences(content))
+
+
+def _merge_summary(state: GraphState) -> dict[str, Any]:
+    """동시에 돌린 LLM 요약을 결과에 합친다. 판정·수치는 통계 결과가 그대로 남는다.
+
+    LLM_SUMMARY_WAIT_SECONDS가 있으면 그만큼만 기다린다(시연은 0 — 끝나 있을 때만 쓴다).
+    없으면 요약이 끝날 때까지 기다린다(평소 동작).
+    """
+    result = state.get("result", {}) or {}
+    future = state.get("summary_future")
+    if future is None:
+        return result
+    wait = os.getenv("LLM_SUMMARY_WAIT_SECONDS")
     try:
-        response = llm_retry.call_with_retry(lambda: llm.invoke(prompt), what="분석 요약")
-        content = response.content if hasattr(response, "content") else str(response)
-        parsed = json.loads(_strip_code_fences(content))
-        # LLM은 서술 텍스트만 바꿀 수 있다. 판정/수치는 통계 결과로 강제한다.
-        result = merge_llm_result(grounded, parsed)
+        parsed = future.result(timeout=float(wait) if wait else None)
+    except FutureTimeout:
+        LOGGER.info("LLM 요약이 아직 끝나지 않아 통계 기반 문장으로 저장합니다.")
+        return result
     except Exception as exc:
         # LLM 오류/네트워크 실패/파싱 실패 시 통계 기반 결과로 폴백한다.
         LOGGER.warning("LLM 분석 실패 — 통계 기반 결과를 사용합니다: %s", exc)
-        result = grounded
-
-    return {"result": result}
+        return result
+    # LLM은 서술 텍스트만 바꿀 수 있다. 판정/수치는 통계 결과로 강제한다.
+    merged = merge_llm_result(result, parsed)
+    if result.get("panel_downgraded"):
+        # 강등 기록은 패널이 근거 목록에 남겼다. LLM 문장으로 덮지 않는다.
+        merged["selected_anomaly_detail"]["evidence"] = \
+            result.get("selected_anomaly_detail", {}).get("evidence", [])
+    return merged
 
 
 
@@ -386,7 +420,7 @@ def route_after_analyze(state: GraphState) -> str:
 
 
 def store_result(state: GraphState) -> GraphState:
-    result = state.get("result", {})
+    result = _merge_summary(state)
     generated_at = datetime.now(timezone.utc).isoformat()
     payload = {
         "@timestamp": generated_at,
@@ -402,10 +436,10 @@ def store_result(state: GraphState) -> GraphState:
     try:
         client = ElasticsearchClient()
         resp = client.save_anomaly_result(payload)
-        return {"result_index": resp.get("_id")}
+        return {"result": result, "result_index": resp.get("_id")}
     except Exception as exc:
         LOGGER.error("이상탐지 결과 저장 실패: %s", exc)
-        return {"result_index": f"error:{exc}"}
+        return {"result": result, "result_index": f"error:{exc}"}
 
 
 def _normal_streak(recent_keys: list[list[str]] | None) -> int:
@@ -454,6 +488,12 @@ def propose_remediation(state: GraphState) -> GraphState:
 
     try:
         client = ElasticsearchClient()
+        # 열린 조치 확인은 분석 시작 때 한 번 했지만, LLM 단계가 수십 초 걸리는 사이에
+        # 다른 분석(시연의 즉시 분석과 정기 분석)이 먼저 제안을 저장했을 수 있다.
+        # 저장 직전에 다시 확인해 같은 급증에 확장 제안이 두 건 생기지 않게 한다.
+        if remediation.has_open_action(client.fetch_recent_actions()):
+            LOGGER.info("다른 분석이 먼저 조치를 제안해 이번 제안은 저장하지 않습니다.")
+            return {"proposed_action_id": None}
         action_id = client.save_action(action)
     except Exception as exc:
         LOGGER.error("자동 대응 제안 저장 실패: %s", exc)
